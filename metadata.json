@@ -1,0 +1,7 @@
+{
+  "name": "Awra ERP - Poultry Management System",
+  "description": "A production-grade Enterprise Resource Planning system for poultry farms, integrating flock management, health diagnostics, inventory, and financial analytics.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
