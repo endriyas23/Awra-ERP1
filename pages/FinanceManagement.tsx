@@ -1,10 +1,9 @@
 
 import React, { useState, useMemo } from 'react';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, BarChart, Bar } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, BarChart, Bar, ReferenceLine } from 'recharts';
 import StatCard from '../components/StatCard';
 import { useInventory } from '../context/InventoryContext';
 import { FinancialTransaction, TransactionType } from '../types';
-import { MOCK_FLOCKS, MOCK_HEALTH_RECORDS } from '../constants';
 
 const COLORS = {
   INCOME: '#10b981',
@@ -18,9 +17,10 @@ const COLORS = {
 };
 
 const FinanceManagement: React.FC = () => {
-  const { transactions, addTransaction, deleteTransaction, consumptionRecords, items, salesRecords } = useInventory();
+  const { transactions, addTransaction, updateTransaction, deleteTransaction, consumptionRecords, items, salesRecords, flocks, healthRecords } = useInventory();
   
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'OVERVIEW' | 'REPORTS' | 'LEDGER' | 'TAX' | 'COST_ANALYSIS'>('OVERVIEW');
   
   // Date Range State
@@ -38,8 +38,34 @@ const FinanceManagement: React.FC = () => {
     withholdingAmount: '',
     type: 'EXPENSE' as TransactionType,
     category: 'OTHER',
-    status: 'COMPLETED'
+    status: 'COMPLETED' as 'COMPLETED' | 'PENDING' | 'CANCELLED'
   });
+
+  // --- Helpers ---
+  const setDatePreset = (preset: 'THIS_MONTH' | 'LAST_MONTH' | 'THIS_YEAR' | 'LAST_30_DAYS') => {
+    const today = new Date();
+    let start = new Date();
+    let end = new Date();
+
+    if (preset === 'THIS_MONTH') {
+        start = new Date(today.getFullYear(), today.getMonth(), 1);
+        end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+    } else if (preset === 'LAST_MONTH') {
+        start = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+        end = new Date(today.getFullYear(), today.getMonth(), 0);
+    } else if (preset === 'THIS_YEAR') {
+        start = new Date(today.getFullYear(), 0, 1);
+        end = today;
+    } else if (preset === 'LAST_30_DAYS') {
+        start.setDate(today.getDate() - 30);
+        end = today;
+    }
+
+    setDateRange({
+        start: start.toISOString().split('T')[0],
+        end: end.toISOString().split('T')[0]
+    });
+  };
 
   // --- Filtering ---
   
@@ -80,10 +106,16 @@ const FinanceManagement: React.FC = () => {
       return { revenue, otherIncome, totalRevenue: revenue + otherIncome, cogs, opex, grossProfit, netProfit, margin };
   }, [filteredTransactions]);
 
+  // Chart Data for P&L
+  const pnlChartData = useMemo(() => [
+    { name: 'Revenue', amount: pnl.totalRevenue, fill: '#10b981' },
+    { name: 'COGS', amount: pnl.cogs, fill: '#f59e0b' },
+    { name: 'Gross Profit', amount: pnl.grossProfit, fill: '#3b82f6' },
+    { name: 'OpEx', amount: pnl.opex, fill: '#ef4444' },
+    { name: 'Net Income', amount: pnl.netProfit, fill: pnl.netProfit >= 0 ? '#0f766e' : '#991b1b' },
+  ], [pnl]);
+
   // 2. Balance Sheet Components (Snapshot / Cumulative)
-  // Assets & Liabilities generally reflect current state, not just the period range, 
-  // but for "Change in Financial Position" we might look at period. 
-  // Here we show Current Snapshot derived from full history + live inventory.
   const balanceSheet = useMemo(() => {
       // Assets
       const inventoryValue = items.reduce((sum, i) => sum + (i.quantity * (i.pricePerUnit || 0)), 0);
@@ -107,6 +139,15 @@ const FinanceManagement: React.FC = () => {
           liabilities: { payables, taxPayable, total: payables + taxPayable }
       };
   }, [items, salesRecords, transactions]);
+
+  // Chart Data for Balance Sheet
+  const balanceSheetChartData = useMemo(() => [
+      { name: 'Cash', type: 'Asset', value: balanceSheet.assets.cashOnHand },
+      { name: 'Inventory', type: 'Asset', value: balanceSheet.assets.inventoryValue },
+      { name: 'Receivables', type: 'Asset', value: balanceSheet.assets.receivables },
+      { name: 'Payables', type: 'Liability', value: balanceSheet.liabilities.payables },
+      { name: 'Tax Due', type: 'Liability', value: balanceSheet.liabilities.taxPayable },
+  ], [balanceSheet]);
 
   // 3. Tax Report Data (Period)
   const taxData = useMemo(() => {
@@ -144,17 +185,17 @@ const FinanceManagement: React.FC = () => {
      filteredTransactions.filter(t => t.type === 'EXPENSE').forEach(t => {
          grouped[t.category] = (grouped[t.category] || 0) + t.amount;
      });
-     return Object.keys(grouped).map(cat => ({ name: cat, value: grouped[cat] }));
+     return Object.keys(grouped).map(cat => ({ name: cat, value: grouped[cat] })).sort((a,b) => b.value - a.value);
   }, [filteredTransactions]);
 
   // 6. Flock Cost Analysis (Cumulative, strictly flock related)
   const flockCostAnalysis = useMemo(() => {
     const flockIds = new Set<string>();
-    MOCK_FLOCKS.forEach(f => flockIds.add(f.id));
+    flocks.forEach(f => flockIds.add(f.id));
     
     return Array.from(flockIds).map(id => {
-        const mockFlock = MOCK_FLOCKS.find(f => f.id === id);
-        const name = mockFlock ? mockFlock.name : `Flock ${id}`;
+        const flock = flocks.find(f => f.id === id);
+        const name = flock ? flock.name : `Flock ${id}`;
         
         const feedCost = consumptionRecords
             .filter(c => c.flockId === id)
@@ -164,19 +205,33 @@ const FinanceManagement: React.FC = () => {
             .filter(t => t.type === 'EXPENSE' && t.referenceId === id && t.status !== 'CANCELLED')
             .reduce((sum, t) => sum + t.amount, 0);
 
-        const healthCost = MOCK_HEALTH_RECORDS
+        const healthCost = healthRecords
             .filter(h => h.flockId === id && h.cost)
             .reduce((sum, h) => sum + (h.cost || 0), 0);
 
         return { id, name, feedCost, transCost, healthCost, total: feedCost + transCost + healthCost };
     }).sort((a,b) => b.total - a.total);
-  }, [consumptionRecords, transactions]);
+  }, [consumptionRecords, transactions, flocks, healthRecords]);
 
 
   // --- Handlers ---
 
-  const handleOpenModal = () => {
-    setForm({
+  const handleOpenModal = (transaction?: FinancialTransaction) => {
+    if (transaction) {
+      setEditingId(transaction.id);
+      setForm({
+        date: transaction.date,
+        description: transaction.description,
+        baseAmount: (transaction.amount - (transaction.vatAmount || 0) + (transaction.withholdingAmount || 0)).toString(),
+        vatAmount: (transaction.vatAmount || '').toString(),
+        withholdingAmount: (transaction.withholdingAmount || '').toString(),
+        type: transaction.type,
+        category: transaction.category,
+        status: transaction.status
+      });
+    } else {
+      setEditingId(null);
+      setForm({
         date: new Date().toISOString().split('T')[0],
         description: '',
         baseAmount: '',
@@ -185,7 +240,8 @@ const FinanceManagement: React.FC = () => {
         type: 'EXPENSE',
         category: 'OTHER',
         status: 'COMPLETED'
-    });
+      });
+    }
     setIsModalOpen(true);
   };
 
@@ -198,8 +254,8 @@ const FinanceManagement: React.FC = () => {
     const wht = parseFloat(form.withholdingAmount) || 0;
     const cashFlowAmount = base + vat - wht;
 
-    const newTransaction: FinancialTransaction = {
-        id: `T-${Date.now()}`,
+    if (editingId) {
+      updateTransaction(editingId, {
         date: form.date,
         description: form.description,
         amount: cashFlowAmount,
@@ -207,15 +263,36 @@ const FinanceManagement: React.FC = () => {
         withholdingAmount: wht > 0 ? wht : undefined,
         type: form.type,
         category: form.category as any,
-        status: form.status as any
-    };
-
-    addTransaction(newTransaction);
+        status: form.status
+      });
+    } else {
+      const newTransaction: FinancialTransaction = {
+          id: `T-${Date.now()}`,
+          date: form.date,
+          description: form.description,
+          amount: cashFlowAmount,
+          vatAmount: vat > 0 ? vat : undefined,
+          withholdingAmount: wht > 0 ? wht : undefined,
+          type: form.type,
+          category: form.category as any,
+          status: form.status
+      };
+      addTransaction(newTransaction);
+    }
+    
     setIsModalOpen(false);
   };
 
-  const handleDelete = (id: string) => {
-      if(confirm("Are you sure you want to delete this transaction entry? This will affect your financial reports.")) {
+  const handleToggleStatus = (e: React.MouseEvent, id: string, currentStatus: string) => {
+    e.stopPropagation();
+    const newStatus = currentStatus === 'PENDING' ? 'COMPLETED' : 'PENDING';
+    updateTransaction(id, { status: newStatus });
+  };
+
+  const handleDelete = (e: React.MouseEvent, id: string) => {
+      e.stopPropagation(); // CRITICAL: Stop row clicks or other events
+      e.preventDefault();
+      if(window.confirm("Are you sure you want to delete this transaction entry? This will affect your financial reports.")) {
           deleteTransaction(id);
       }
   };
@@ -237,6 +314,13 @@ const FinanceManagement: React.FC = () => {
         </div>
         
         <div className="flex flex-col md:flex-row gap-4 w-full xl:w-auto">
+            {/* Presets */}
+            <div className="flex bg-slate-100 p-1 rounded-xl">
+                <button onClick={() => setDatePreset('THIS_MONTH')} className="px-3 py-1.5 text-xs font-bold text-slate-500 hover:text-slate-700 hover:bg-slate-200 rounded-lg">Month</button>
+                <button onClick={() => setDatePreset('LAST_30_DAYS')} className="px-3 py-1.5 text-xs font-bold text-slate-500 hover:text-slate-700 hover:bg-slate-200 rounded-lg">30d</button>
+                <button onClick={() => setDatePreset('THIS_YEAR')} className="px-3 py-1.5 text-xs font-bold text-slate-500 hover:text-slate-700 hover:bg-slate-200 rounded-lg">YTD</button>
+            </div>
+
             {/* Date Range Picker */}
             <div className="bg-white p-1.5 rounded-xl border border-slate-200 shadow-sm flex items-center gap-2">
                 <div className="flex items-center gap-2 px-2">
@@ -261,7 +345,7 @@ const FinanceManagement: React.FC = () => {
             </div>
 
             <button 
-                onClick={handleOpenModal}
+                onClick={() => handleOpenModal()}
                 className="bg-teal-600 hover:bg-teal-700 text-white px-5 py-2.5 rounded-xl font-semibold shadow-lg shadow-teal-600/20 transition-all flex items-center justify-center gap-2 whitespace-nowrap"
             >
                 <span>➕</span> New Transaction
@@ -384,49 +468,68 @@ const FinanceManagement: React.FC = () => {
 
       {/* --- REPORTS (P&L, BALANCE SHEET) --- */}
       {activeTab === 'REPORTS' && (
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-8 animate-in slide-in-from-right-4 duration-300">
+          <div className="space-y-8 animate-in slide-in-from-right-4 duration-300">
               
-              {/* Profit & Loss Statement */}
-              <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
-                  <div className="p-6 border-b border-slate-50 flex justify-between items-center bg-slate-50/30">
-                      <h3 className="text-lg font-bold text-slate-800">Profit & Loss Statement</h3>
-                      <span className="text-xs text-slate-400 font-medium">Period: {dateRange.start} to {dateRange.end}</span>
+              {/* Income Statement Section */}
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
+                  <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden h-full flex flex-col">
+                      <div className="p-6 border-b border-slate-50 flex justify-between items-center bg-slate-50/30">
+                          <h3 className="text-lg font-bold text-slate-800">Income Statement (P&L)</h3>
+                          <span className="text-xs text-slate-400 font-medium">{dateRange.start} to {dateRange.end}</span>
+                      </div>
+                      <div className="p-6 flex-1">
+                          <table className="w-full text-sm">
+                              <tbody>
+                                  <tr className="border-b border-slate-100"><td colSpan={2} className="py-2 font-bold text-emerald-700 uppercase text-xs tracking-wider">Revenue</td></tr>
+                                  <tr><td className="py-2 pl-4 text-slate-600">Sales Revenue</td><td className="py-2 text-right font-medium">${pnl.revenue.toLocaleString()}</td></tr>
+                                  <tr><td className="py-2 pl-4 text-slate-600">Other Income</td><td className="py-2 text-right font-medium">${pnl.otherIncome.toLocaleString()}</td></tr>
+                                  <tr className="bg-emerald-50/50 font-bold"><td className="py-2 pl-4">Total Revenue</td><td className="py-2 text-right text-emerald-700">${pnl.totalRevenue.toLocaleString()}</td></tr>
+                                  
+                                  <tr><td colSpan={2} className="py-3 font-bold text-amber-700 uppercase text-xs tracking-wider">Direct Costs (COGS)</td></tr>
+                                  <tr><td className="py-2 pl-4 text-slate-600">Feed, Meds & Stock</td><td className="py-2 text-right font-medium">(${pnl.cogs.toLocaleString()})</td></tr>
+                                  
+                                  <tr className="bg-slate-50 font-bold text-slate-800 border-t border-b border-slate-200"><td className="py-3 pl-4">Gross Profit</td><td className="py-3 text-right">${pnl.grossProfit.toLocaleString()}</td></tr>
+
+                                  <tr><td colSpan={2} className="py-3 font-bold text-red-700 uppercase text-xs tracking-wider">Operating Expenses (OpEx)</td></tr>
+                                  <tr><td className="py-2 pl-4 text-slate-600">Overhead & Labor</td><td className="py-2 text-right font-medium">(${pnl.opex.toLocaleString()})</td></tr>
+
+                                  <tr className={`font-bold text-lg border-t-2 border-slate-200 ${pnl.netProfit >= 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'}`}>
+                                      <td className="py-4 pl-4">Net Income</td>
+                                      <td className="py-4 text-right">${pnl.netProfit.toLocaleString()}</td>
+                                  </tr>
+                              </tbody>
+                          </table>
+                      </div>
                   </div>
-                  <div className="p-6">
-                      <table className="w-full text-sm">
-                          <tbody>
-                              {/* Revenue Section */}
-                              <tr className="border-b border-slate-100"><td colSpan={2} className="py-2 font-bold text-emerald-700 uppercase text-xs tracking-wider">Revenue</td></tr>
-                              <tr><td className="py-2 pl-4 text-slate-600">Sales Revenue</td><td className="py-2 text-right font-medium">${pnl.revenue.toLocaleString()}</td></tr>
-                              <tr><td className="py-2 pl-4 text-slate-600">Other Income</td><td className="py-2 text-right font-medium">${pnl.otherIncome.toLocaleString()}</td></tr>
-                              <tr className="bg-emerald-50/50 font-bold"><td className="py-2 pl-4">Total Revenue</td><td className="py-2 text-right text-emerald-700">${pnl.totalRevenue.toLocaleString()}</td></tr>
-                              
-                              {/* COGS Section */}
-                              <tr><td colSpan={2} className="py-3 font-bold text-amber-700 uppercase text-xs tracking-wider">Cost of Goods Sold (Direct)</td></tr>
-                              <tr><td className="py-2 pl-4 text-slate-600">Feed, Meds & Livestock</td><td className="py-2 text-right font-medium">(${pnl.cogs.toLocaleString()})</td></tr>
-                              
-                              {/* Gross Profit */}
-                              <tr className="bg-slate-50 font-bold text-slate-800 border-t border-b border-slate-200"><td className="py-3 pl-4">Gross Profit</td><td className="py-3 text-right">${pnl.grossProfit.toLocaleString()}</td></tr>
 
-                              {/* OpEx Section */}
-                              <tr><td colSpan={2} className="py-3 font-bold text-red-700 uppercase text-xs tracking-wider">Operating Expenses</td></tr>
-                              <tr><td className="py-2 pl-4 text-slate-600">Labor, Utilities, Maint.</td><td className="py-2 text-right font-medium">(${pnl.opex.toLocaleString()})</td></tr>
-
-                              {/* Net Profit */}
-                              <tr className={`font-bold text-lg border-t-2 border-slate-200 ${pnl.netProfit >= 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'}`}>
-                                  <td className="py-4 pl-4">Net Income</td>
-                                  <td className="py-4 text-right">${pnl.netProfit.toLocaleString()}</td>
-                              </tr>
-                          </tbody>
-                      </table>
+                  {/* P&L Visualization */}
+                  <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-6 flex flex-col">
+                      <h3 className="text-lg font-bold text-slate-800 mb-6">Financial Performance Visualization</h3>
+                      <div className="flex-1 min-h-[300px]">
+                          <ResponsiveContainer width="100%" height="100%">
+                              <BarChart data={pnlChartData} barSize={60}>
+                                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                                  <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 12, fill: '#64748b'}} />
+                                  <YAxis axisLine={false} tickLine={false} tick={{fontSize: 12, fill: '#64748b'}} tickFormatter={(val) => `$${val/1000}k`} />
+                                  <Tooltip cursor={{fill: '#f8fafc'}} contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)'}} formatter={(val: number) => `$${val.toLocaleString()}`} />
+                                  <ReferenceLine y={0} stroke="#cbd5e1" />
+                                  <Bar dataKey="amount" radius={[4, 4, 0, 0]}>
+                                    {pnlChartData.map((entry, index) => (
+                                        <Cell key={`cell-${index}`} fill={entry.fill} />
+                                    ))}
+                                  </Bar>
+                              </BarChart>
+                          </ResponsiveContainer>
+                      </div>
                   </div>
               </div>
 
-              {/* Balance Sheet Snapshot */}
-              <div className="space-y-6">
-                  <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
+              {/* Balance Sheet Section */}
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
+                  {/* Balance Sheet Snapshot */}
+                  <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden h-full">
                       <div className="p-6 border-b border-slate-50 flex justify-between items-center bg-blue-50/30">
-                          <h3 className="text-lg font-bold text-slate-800">Financial Position (Snapshot)</h3>
+                          <h3 className="text-lg font-bold text-slate-800">Balance Sheet (Snapshot)</h3>
                           <span className="text-xs text-slate-400 font-medium">As of Today</span>
                       </div>
                       <div className="p-6 grid grid-cols-2 gap-8">
@@ -463,28 +566,23 @@ const FinanceManagement: React.FC = () => {
                       </div>
                   </div>
 
-                  {/* Visual: Assets vs Liabilities */}
-                  <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-                      <h4 className="text-sm font-bold text-slate-700 mb-4">Ratio Analysis</h4>
-                      <div className="space-y-4">
-                          <div>
-                              <div className="flex justify-between text-xs mb-1">
-                                  <span className="text-slate-500">Asset to Liability Ratio</span>
-                                  <span className="font-bold">{balanceSheet.liabilities.total > 0 ? (balanceSheet.assets.total / balanceSheet.liabilities.total).toFixed(2) : '∞'}</span>
-                              </div>
-                              <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                                  <div className="bg-blue-500 h-full" style={{ width: `${Math.min(100, (balanceSheet.assets.total / (balanceSheet.assets.total + balanceSheet.liabilities.total)) * 100)}%` }}></div>
-                              </div>
-                          </div>
-                          <div>
-                              <div className="flex justify-between text-xs mb-1">
-                                  <span className="text-slate-500">Profit Margin (Period)</span>
-                                  <span className={`font-bold ${pnl.margin >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{pnl.margin.toFixed(1)}%</span>
-                              </div>
-                              <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                                  <div className={`h-full ${pnl.margin >= 0 ? 'bg-emerald-500' : 'bg-red-500'}`} style={{ width: `${Math.min(100, Math.abs(pnl.margin))}%` }}></div>
-                              </div>
-                          </div>
+                  {/* Balance Sheet Visualization */}
+                  <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-6 flex flex-col">
+                      <h3 className="text-lg font-bold text-slate-800 mb-6">Assets vs Liabilities Composition</h3>
+                      <div className="flex-1 min-h-[300px]">
+                          <ResponsiveContainer width="100%" height="100%">
+                              <BarChart data={balanceSheetChartData} layout="vertical" margin={{left: 20}}>
+                                  <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke="#f1f5f9" />
+                                  <XAxis type="number" hide />
+                                  <YAxis dataKey="name" type="category" width={80} tick={{fontSize: 11, fill: '#64748b'}} />
+                                  <Tooltip cursor={{fill: '#f8fafc'}} contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)'}} formatter={(val: number) => `$${val.toLocaleString()}`} />
+                                  <Bar dataKey="value" radius={[0, 4, 4, 0]}>
+                                    {balanceSheetChartData.map((entry, index) => (
+                                        <Cell key={`cell-${index}`} fill={entry.type === 'Asset' ? '#3b82f6' : '#ef4444'} />
+                                    ))}
+                                  </Bar>
+                              </BarChart>
+                          </ResponsiveContainer>
                       </div>
                   </div>
               </div>
@@ -515,7 +613,7 @@ const FinanceManagement: React.FC = () => {
                     </thead>
                     <tbody className="divide-y divide-slate-50 text-sm">
                         {filteredTransactions.map(t => (
-                            <tr key={t.id} className="hover:bg-slate-50 transition-colors">
+                            <tr key={t.id} className="hover:bg-slate-50 transition-colors group">
                                 <td className="px-6 py-4 font-mono text-slate-500">{t.date}</td>
                                 <td className="px-6 py-4 font-medium text-slate-800">
                                     {t.description}
@@ -548,8 +646,32 @@ const FinanceManagement: React.FC = () => {
                                         {t.status}
                                     </span>
                                 </td>
-                                <td className="px-6 py-4 text-right">
-                                    <button onClick={() => handleDelete(t.id)} className="text-slate-300 hover:text-red-500 transition-colors">✕</button>
+                                <td className="px-6 py-4 text-right relative z-10">
+                                    <div className="flex justify-end gap-2">
+                                        {(t.status === 'PENDING' || t.status === 'COMPLETED') && (
+                                            <button 
+                                                onClick={(e) => handleToggleStatus(e, t.id, t.status)}
+                                                className={`w-7 h-7 flex items-center justify-center rounded-lg transition-colors ${t.status === 'PENDING' ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100' : 'bg-amber-50 text-amber-600 hover:bg-amber-100'}`}
+                                                title={t.status === 'PENDING' ? "Mark Paid" : "Mark Pending"}
+                                            >
+                                                {t.status === 'PENDING' ? '✓' : '↺'}
+                                            </button>
+                                        )}
+                                        <button 
+                                            onClick={(e) => { e.stopPropagation(); handleOpenModal(t); }}
+                                            className="w-7 h-7 flex items-center justify-center bg-slate-100 text-slate-500 rounded-lg hover:bg-teal-100 hover:text-teal-600 transition-colors"
+                                            title="Edit"
+                                        >
+                                            ✎
+                                        </button>
+                                        <button 
+                                            onClick={(e) => handleDelete(e, t.id)} 
+                                            className="w-7 h-7 flex items-center justify-center bg-slate-100 text-slate-500 rounded-lg hover:bg-red-100 hover:text-red-600 transition-colors"
+                                            title="Delete"
+                                        >
+                                            ✕
+                                        </button>
+                                    </div>
                                 </td>
                             </tr>
                         ))}
@@ -624,12 +746,12 @@ const FinanceManagement: React.FC = () => {
           </div>
       )}
 
-      {/* New Transaction Modal */}
+      {/* New/Edit Transaction Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
           <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
              <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-teal-50/50">
-               <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">New Transaction</h3>
+               <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">{editingId ? 'Edit Transaction' : 'New Transaction'}</h3>
                <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-600">✕</button>
              </div>
              
@@ -682,20 +804,22 @@ const FinanceManagement: React.FC = () => {
                         <option value="LABOR">Labor / Wages</option>
                         <option value="MAINTENANCE">Maintenance</option>
                         <option value="UTILITIES">Utilities</option>
+                        <option value="LIVESTOCK">Livestock</option>
                         <option value="OTHER">Other</option>
                      </select>
                   </div>
                   <div>
                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Status</label>
-                     <select className="w-full p-3 rounded-xl border border-slate-200 bg-white" value={form.status} onChange={e => setForm({...form, status: e.target.value})}>
+                     <select className="w-full p-3 rounded-xl border border-slate-200 bg-white" value={form.status} onChange={e => setForm({...form, status: e.target.value as any})}>
                         <option value="COMPLETED">Completed (Paid)</option>
                         <option value="PENDING">Pending (Unpaid)</option>
+                        <option value="CANCELLED">Cancelled</option>
                      </select>
                   </div>
                </div>
 
                <button type="submit" className={`w-full py-3 text-white rounded-xl font-bold shadow-lg transition-all ${form.type === 'INCOME' ? 'bg-emerald-500 hover:bg-emerald-600 shadow-emerald-500/20' : 'bg-red-500 hover:bg-red-600 shadow-red-500/20'}`}>
-                 Record {form.type === 'INCOME' ? 'Income' : 'Expense'}
+                 {editingId ? 'Update' : 'Record'} {form.type === 'INCOME' ? 'Income' : 'Expense'}
                </button>
              </form>
           </div>

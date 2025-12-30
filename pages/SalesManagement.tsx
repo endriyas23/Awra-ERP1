@@ -4,19 +4,18 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import StatCard from '../components/StatCard';
 import { useInventory } from '../context/InventoryContext';
 import { SaleRecord } from '../types';
-import { MOCK_FLOCKS } from '../constants';
 
 const COLORS = ['#0f766e', '#f59e0b', '#3b82f6', '#ef4444'];
 
 const SalesManagement: React.FC = () => {
-  const { items: inventoryItems, salesRecords, addSale, adjustStock, updateSaleStatus } = useInventory();
+  const { items: inventoryItems, salesRecords, addSale, adjustStock, updateSaleStatus, flocks } = useInventory();
   
   // Filter sellable items (Produce and Birds)
   const sellableItems = inventoryItems.filter(i => i.category === 'PRODUCE' || i.category === 'BIRDS');
 
   // States
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [filterStatus, setFilterStatus] = useState<'ALL' | 'PAID' | 'PENDING' | 'CANCELLED'>('ALL');
+  const [filterStatus, setFilterStatus] = useState<'ALL' | 'PAID' | 'CREDIT' | 'CANCELLED'>('ALL');
   
   // Form State
   const [form, setForm] = useState({
@@ -36,7 +35,7 @@ const SalesManagement: React.FC = () => {
     .filter(s => s.status === 'PAID')
     .reduce((acc, s) => acc + s.totalAmount, 0);
 
-  const pendingPayments = salesRecords
+  const creditOutstanding = salesRecords
     .filter(s => s.status === 'PENDING')
     .reduce((acc, s) => acc + s.totalAmount, 0);
 
@@ -74,7 +73,9 @@ const SalesManagement: React.FC = () => {
 
   const filteredSales = filterStatus === 'ALL' 
     ? salesRecords 
-    : salesRecords.filter(s => s.status === filterStatus);
+    : filterStatus === 'CREDIT' 
+      ? salesRecords.filter(s => s.status === 'PENDING')
+      : salesRecords.filter(s => s.status === filterStatus);
 
   const calculateTotals = () => {
       const qty = parseFloat(form.quantity) || 0;
@@ -163,7 +164,7 @@ const SalesManagement: React.FC = () => {
               updateSaleStatus(sale.id, 'PAID');
           }
       } else if (sale.status === 'PAID') {
-           if(confirm(`Revert transaction status to Pending?`)) {
+           if(confirm(`Revert transaction status to Credit/Pending?`)) {
               updateSaleStatus(sale.id, 'PENDING');
           }
       }
@@ -185,7 +186,7 @@ const SalesManagement: React.FC = () => {
       <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4">
         <div>
           <h2 className="text-3xl font-bold text-slate-900">Sales & Orders</h2>
-          <p className="text-slate-500 mt-1">Manage customer orders, track revenue, and process invoices.</p>
+          <p className="text-slate-500 mt-1">Manage customer orders, track revenue, and credit sales.</p>
         </div>
         <button 
           onClick={handleOpenModal}
@@ -196,8 +197,8 @@ const SalesManagement: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <StatCard label="Total Revenue" value={`$${totalRevenue.toLocaleString()}`} icon="💵" color="bg-emerald-500" trend={{value: 12, positive: true}} />
-        <StatCard label="Pending Payments" value={`$${pendingPayments.toLocaleString()}`} icon="⏳" color="bg-amber-500" />
+        <StatCard label="Total Revenue (Cash)" value={`$${totalRevenue.toLocaleString()}`} icon="💵" color="bg-emerald-500" trend={{value: 0, positive: true}} />
+        <StatCard label="Credit Outstanding" value={`$${creditOutstanding.toLocaleString()}`} icon="⏳" color="bg-amber-500" />
         <StatCard label="Total Orders" value={totalOrders} icon="📦" color="bg-blue-500" />
       </div>
 
@@ -246,7 +247,7 @@ const SalesManagement: React.FC = () => {
          <div className="p-6 border-b border-slate-50 flex flex-col sm:flex-row justify-between items-center gap-4">
             <h3 className="font-bold text-slate-800">Transaction History</h3>
             <div className="flex bg-slate-100 p-1 rounded-xl">
-                 {['ALL', 'PAID', 'PENDING', 'CANCELLED'].map(status => (
+                 {['ALL', 'PAID', 'CREDIT', 'CANCELLED'].map(status => (
                    <button
                      key={status}
                      onClick={() => setFilterStatus(status as any)}
@@ -273,7 +274,7 @@ const SalesManagement: React.FC = () => {
                 </thead>
                 <tbody className="divide-y divide-slate-50 text-sm">
                     {filteredSales.map(sale => {
-                        const flockName = MOCK_FLOCKS.find(f => f.id === sale.flockId)?.name || sale.flockId || '-';
+                        const flockName = flocks.find(f => f.id === sale.flockId)?.name || sale.flockId || '-';
                         return (
                         <tr key={sale.id} className={`hover:bg-slate-50 transition-colors ${sale.status === 'CANCELLED' ? 'opacity-50' : ''}`}>
                             <td className="px-6 py-4 font-medium text-slate-600">{sale.date}</td>
@@ -285,8 +286,15 @@ const SalesManagement: React.FC = () => {
                             <td className="px-6 py-4 text-xs text-teal-600 font-medium">{flockName}</td>
                             <td className="px-6 py-4 font-bold text-teal-600">${sale.totalAmount.toLocaleString()}</td>
                             <td className="px-6 py-4">
-                                <span onClick={() => toggleStatus(sale)} className={`px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider cursor-pointer select-none ${sale.status === 'PAID' ? 'bg-emerald-100 text-emerald-700' : sale.status === 'PENDING' ? 'bg-amber-100 text-amber-700 hover:bg-amber-200' : 'bg-slate-100 text-slate-500'}`}>
-                                    {sale.status}
+                                <span 
+                                    onClick={() => toggleStatus(sale)} 
+                                    className={`px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider cursor-pointer select-none ${
+                                        sale.status === 'PAID' ? 'bg-emerald-100 text-emerald-700' : 
+                                        sale.status === 'PENDING' ? 'bg-amber-100 text-amber-700 hover:bg-amber-200' : 
+                                        'bg-slate-100 text-slate-500'
+                                    }`}
+                                >
+                                    {sale.status === 'PENDING' ? 'CREDIT' : sale.status}
                                 </span>
                             </td>
                             <td className="px-6 py-4 text-right">
@@ -324,10 +332,10 @@ const SalesManagement: React.FC = () => {
                     <input required type="date" className="w-full p-3 rounded-xl border border-slate-200" value={form.date} onChange={e => setForm({...form, date: e.target.value})} />
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Payment Status</label>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Payment Method</label>
                     <select className="w-full p-3 rounded-xl border border-slate-200" value={form.status} onChange={e => setForm({...form, status: e.target.value as any})}>
-                        <option value="PAID">Paid (Received)</option>
-                        <option value="PENDING">Pending (Credit)</option>
+                        <option value="PAID">Cash / Instant Payment</option>
+                        <option value="PENDING">Credit / Pay Later</option>
                     </select>
                   </div>
                </div>
@@ -344,7 +352,7 @@ const SalesManagement: React.FC = () => {
                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Source Flock (Optional)</label>
                      <select className="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-teal-500 outline-none" value={form.flockId} onChange={e => setForm({...form, flockId: e.target.value})}>
                         <option value="">-- General Stock --</option>
-                        {MOCK_FLOCKS.map(flock => <option key={flock.id} value={flock.id}>{flock.name} ({flock.type})</option>)}
+                        {flocks.map(flock => <option key={flock.id} value={flock.id}>{flock.name} ({flock.type})</option>)}
                      </select>
                    </div>
                </div>

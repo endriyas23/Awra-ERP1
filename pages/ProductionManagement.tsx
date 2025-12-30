@@ -2,12 +2,11 @@
 import React, { useState, useMemo } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from 'recharts';
 import StatCard from '../components/StatCard';
-import { MOCK_FLOCKS } from '../constants';
 import { EggCollectionLog } from '../types';
 import { useInventory } from '../context/InventoryContext';
 
 const ProductionManagement: React.FC = () => {
-  const { items: inventoryItems, adjustStock, eggLogs, logEggCollection } = useInventory();
+  const { items: inventoryItems, adjustStock, eggLogs, logEggCollection, flocks, consumptionRecords } = useInventory();
   
   // States
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -28,7 +27,7 @@ const ProductionManagement: React.FC = () => {
   });
 
   // Filters
-  const layerFlocks = MOCK_FLOCKS.filter(f => f.type === 'LAYER' && f.status === 'ACTIVE');
+  const layerFlocks = flocks.filter(f => f.type === 'LAYER' && f.status === 'ACTIVE');
   const produceItems = inventoryItems.filter(i => i.category === 'PRODUCE' && i.name.includes('Eggs'));
 
   // --- KPI Calculations ---
@@ -38,11 +37,33 @@ const ProductionManagement: React.FC = () => {
   const totalEggsToday = todaysLogs.reduce((acc, l) => acc + l.totalGoodEggs, 0);
   const damagedToday = todaysLogs.reduce((acc, l) => acc + l.damagedCount, 0);
   
-  // Calculate Laying % (Total Eggs / Total Active Layers)
+  // Active Layer Population
   const totalLayers = layerFlocks.reduce((acc, f) => acc + f.currentCount, 0);
   const layingPercentage = totalLayers > 0 ? ((totalEggsToday / totalLayers) * 100).toFixed(1) : '0.0';
 
-  // Calculate Estimated Revenue Value of Production
+  // --- Efficiency Metrics (Rolling 7-Day Average) ---
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+  const dateLimit = sevenDaysAgo.toISOString().split('T')[0];
+  const layerFlockIds = layerFlocks.map(f => f.id);
+
+  // Filter logs for last 7 days for active layer flocks
+  const weeklyEggLogs = eggLogs.filter(l => l.date >= dateLimit && layerFlockIds.includes(l.flockId));
+  const weeklyFeedLogs = consumptionRecords.filter(c => c.date >= dateLimit && layerFlockIds.includes(c.flockId));
+
+  const sumEggs7d = weeklyEggLogs.reduce((acc, l) => acc + l.totalGoodEggs, 0);
+  const sumFeed7d = weeklyFeedLogs.reduce((acc, l) => acc + l.quantity, 0); // kg
+
+  // 1. FCR Calculation: Kg Feed / Kg Eggs (Assuming avg egg weight ~60g = 0.06kg)
+  const estEggMassKg = sumEggs7d * 0.06;
+  const fcr = estEggMassKg > 0 ? (sumFeed7d / estEggMassKg).toFixed(2) : '---';
+
+  // 2. Eggs Per Bird Per Day (Hen-Day Production)
+  // Approximation: Using current active count. For strict accuracy, daily population logs would be summed.
+  const birdDays = totalLayers * 7;
+  const eggsPerBird = birdDays > 0 ? (sumEggs7d / birdDays).toFixed(2) : '---';
+
+  // Calculate Estimated Revenue Value of Production (Today)
   const estimatedValue = todaysLogs.reduce((total, log) => {
       let logValue = 0;
       log.collectedItems.forEach(item => {
@@ -159,13 +180,13 @@ const ProductionManagement: React.FC = () => {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
         <StatCard 
             label="Collected Today" 
             value={totalEggsToday.toLocaleString()} 
             icon="🧺" 
             color="bg-amber-500" 
-            trend={{value: 2.5, positive: true}}
+            trend={{value: 0, positive: true}}
         />
         <StatCard 
             label="Est. Market Value" 
@@ -174,17 +195,25 @@ const ProductionManagement: React.FC = () => {
             color="bg-teal-500" 
         />
         <StatCard 
-            label="Laying Rate (Avg)" 
+            label="Laying Rate (Today)" 
             value={`${layingPercentage}%`} 
             icon="📈" 
             color="bg-emerald-500" 
-            trend={{value: 0.5, positive: true}}
+            trend={{value: 0, positive: true}}
         />
+        {/* New Metric: Eggs Per Bird */}
         <StatCard 
-            label="Damaged / Broken" 
-            value={damagedToday} 
-            icon="📉" 
-            color="bg-red-500" 
+            label="Eggs/Bird (7-Day Avg)" 
+            value={eggsPerBird} 
+            icon="🐔" 
+            color="bg-blue-500" 
+        />
+        {/* New Metric: FCR */}
+        <StatCard 
+            label="FCR (7-Day Avg)" 
+            value={fcr} 
+            icon="⚖️" 
+            color={parseFloat(fcr) > 2.2 ? "bg-red-500" : "bg-indigo-500"} 
         />
       </div>
 
@@ -262,7 +291,7 @@ const ProductionManagement: React.FC = () => {
                 </thead>
                 <tbody className="divide-y divide-slate-50 text-sm">
                     {eggLogs.map(log => {
-                        const flockName = MOCK_FLOCKS.find(f => f.id === log.flockId)?.name || log.flockId;
+                        const flockName = flocks.find(f => f.id === log.flockId)?.name || log.flockId;
                         
                         // Create breakdown string
                         const breakdown = log.collectedItems.map(item => {
@@ -286,6 +315,9 @@ const ProductionManagement: React.FC = () => {
                             </tr>
                         );
                     })}
+                    {eggLogs.length === 0 && (
+                        <tr><td colSpan={6} className="px-6 py-8 text-center text-slate-400 italic">No collection logs found.</td></tr>
+                    )}
                 </tbody>
             </table>
         </div>

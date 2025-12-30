@@ -1,10 +1,11 @@
 
 export enum UserRole {
   ADMIN = 'ADMIN',
-  FARM_MANAGER = 'FARM_MANAGER',
+  MANAGER = 'MANAGER',
   VETERINARIAN = 'VETERINARIAN',
   ACCOUNTANT = 'ACCOUNTANT',
-  SALES = 'SALES'
+  FARM_WORKER = 'FARM_WORKER',
+  PENDING = 'PENDING'
 }
 
 export interface User {
@@ -173,4 +174,5 @@ export interface Task {
   priority: 'HIGH' | 'MEDIUM' | 'LOW';
   status: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED';
   due: string;
+  flockId?: string;
 }

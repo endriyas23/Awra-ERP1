@@ -6,12 +6,11 @@ import {
 } from 'recharts';
 import StatCard from '../components/StatCard';
 import { useInventory } from '../context/InventoryContext';
-import { MOCK_FLOCKS, MOCK_HEALTH_RECORDS } from '../constants';
 
 const COLORS = ['#0f766e', '#f59e0b', '#3b82f6', '#ef4444', '#8b5cf6'];
 
 const AnalyticsManagement: React.FC = () => {
-  const { transactions, consumptionRecords, salesRecords } = useInventory();
+  const { transactions, consumptionRecords, salesRecords, flocks, healthRecords } = useInventory();
   const [timeRange, setTimeRange] = useState<'30D' | '90D' | 'YTD'>('YTD');
 
   // --- Financial Aggregation (General) ---
@@ -47,7 +46,7 @@ const AnalyticsManagement: React.FC = () => {
 
   // --- Flock Profitability & ROI Calculation ---
   const flockProfitability = useMemo(() => {
-      return MOCK_FLOCKS.map(flock => {
+      return flocks.map(flock => {
           // 1. Revenue: Linked Sales
           const revenue = salesRecords
             .filter(s => s.flockId === flock.id && s.status !== 'CANCELLED')
@@ -60,7 +59,7 @@ const AnalyticsManagement: React.FC = () => {
             .reduce((acc, c) => acc + c.cost, 0);
           
           // Health
-          const healthCost = MOCK_HEALTH_RECORDS
+          const healthCost = healthRecords
             .filter(h => h.flockId === flock.id && h.cost)
             .reduce((acc, h) => acc + (h.cost || 0), 0);
 
@@ -81,11 +80,11 @@ const AnalyticsManagement: React.FC = () => {
               roi
           };
       }).sort((a,b) => b.revenue - a.revenue); // Sort by highest revenue
-  }, [MOCK_FLOCKS, salesRecords, consumptionRecords, transactions]);
+  }, [flocks, salesRecords, consumptionRecords, transactions, healthRecords]);
 
   // --- Predictive Modeling ---
   const projections = useMemo(() => {
-      const activeBroilers = MOCK_FLOCKS.filter(f => f.type === 'BROILER' && f.status === 'ACTIVE');
+      const activeBroilers = flocks.filter(f => f.type === 'BROILER' && f.status === 'ACTIVE');
       return activeBroilers.map(flock => {
           const targetWeight = 2.2; 
           const pricePerKg = 3.5; 
@@ -98,7 +97,7 @@ const AnalyticsManagement: React.FC = () => {
               completion: (flock.ageInDays / 42) * 100
           };
       });
-  }, [MOCK_FLOCKS]);
+  }, [flocks]);
 
   // KPIs
   const totalRevenue = financialData.reduce((acc, d) => acc + d.revenue, 0);
@@ -129,7 +128,7 @@ const AnalyticsManagement: React.FC = () => {
 
       {/* Top Level KPIs */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <StatCard label="Net Profit Margin" value={`${profitMargin.toFixed(1)}%`} icon="💹" color={profitMargin > 15 ? "bg-emerald-500" : "bg-amber-500"} trend={{value: 2.4, positive: true}} />
+        <StatCard label="Net Profit Margin" value={`${profitMargin.toFixed(1)}%`} icon="💹" color={profitMargin > 15 ? "bg-emerald-500" : "bg-amber-500"} trend={{value: 0, positive: true}} />
         <StatCard label="Pipeline Revenue" value={`$${projections.reduce((acc, p) => acc + p.projectedRevenue, 0).toLocaleString()}`} icon="🔮" color="bg-indigo-500" />
         <StatCard label="Avg Flock ROI" value={`${(flockProfitability.reduce((acc, f) => acc + f.roi, 0) / (flockProfitability.length || 1)).toFixed(1)}%`} icon="📊" color="bg-blue-500" />
         <StatCard label="OpEx Ratio" value={`${((1 - (profitMargin/100)) * 100).toFixed(1)}%`} icon="📉" color="bg-orange-500" />
@@ -187,6 +186,9 @@ const AnalyticsManagement: React.FC = () => {
                                   </td>
                               </tr>
                           ))}
+                          {flockProfitability.length === 0 && (
+                              <tr><td colSpan={3} className="py-8 text-center text-slate-400 italic">No flock data for analysis.</td></tr>
+                          )}
                       </tbody>
                   </table>
               </div>

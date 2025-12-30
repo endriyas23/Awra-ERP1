@@ -1,8 +1,9 @@
 
 import React, { useState } from 'react';
 import { getDiagnosticDiagnosis } from '../services/geminiService';
-import { HealthRecord, HealthRecordType, Flock } from '../types';
+import { HealthRecord, HealthRecordType, UserRole } from '../types';
 import { useInventory } from '../context/InventoryContext';
+import { useAuth } from '../context/AuthContext';
 
 const HEALTH_TYPES: HealthRecordType[] = [
   'CHECKUP', 'VACCINATION', 'MEDICATION', 'TREATMENT', 
@@ -38,8 +39,12 @@ const HealthManagement: React.FC = () => {
     updateHealthRecord,
     deleteHealthRecord
   } = useInventory();
+  const { role } = useAuth();
   
   const medicineInventory = inventoryItems.filter(i => i.category === 'MEDICINE');
+
+  // Access Control: RBAC Removed, full access for everyone
+  const isReadOnly = false;
 
   // State for AI Diagnosis
   const [symptoms, setSymptoms] = useState('');
@@ -48,7 +53,6 @@ const HealthManagement: React.FC = () => {
   const [errorAI, setErrorAI] = useState<string | null>(null);
 
   // State for Health Records
-  // Using context state `healthRecords` directly in render
   const [activeTab, setActiveTab] = useState<HealthRecordType | 'ALL'>('ALL');
   const [viewMode, setViewMode] = useState<'GRID' | 'TABLE'>('TABLE');
   
@@ -104,6 +108,7 @@ const HealthManagement: React.FC = () => {
   };
 
   const saveAIDiagnosis = () => {
+    if (isReadOnly) return;
     if (!diagnosisResult) return;
     const record: HealthRecord = {
       id: `H${Date.now()}`,
@@ -127,6 +132,7 @@ const HealthManagement: React.FC = () => {
   // --- Schedule Logic ---
   const handleGenerateSchedule = (e: React.FormEvent) => {
     e.preventDefault();
+    if (isReadOnly) return;
     const flock = flocks.find(f => f.id === scheduleFlockId);
     if (!flock) return;
 
@@ -176,6 +182,7 @@ const HealthManagement: React.FC = () => {
 
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (isReadOnly) return;
     if (!manualSchedule.flockId || !manualSchedule.date || !manualSchedule.vaccine) return;
     
     const record: HealthRecord = {
@@ -225,11 +232,13 @@ const HealthManagement: React.FC = () => {
   };
 
   const handleOpenCreate = (type: HealthRecordType) => {
+    if (isReadOnly) return;
     resetForm(type);
     setIsModalOpen(true);
   };
 
   const handleEdit = (record: HealthRecord) => {
+    if (isReadOnly) return;
     setEditingId(record.id);
     setModalType(record.type);
     setNewRecord({
@@ -241,6 +250,7 @@ const HealthManagement: React.FC = () => {
   };
 
   const handleDeleteClick = (id: string) => {
+    if (isReadOnly) return;
     setRecordToDelete(id);
     setDeleteModalOpen(true);
   };
@@ -272,6 +282,7 @@ const HealthManagement: React.FC = () => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (isReadOnly) return;
     
     // Process Stock Deduction
     if (selectedInventoryId && consumedQuantity > 0 && !editingId) {
@@ -392,18 +403,22 @@ const HealthManagement: React.FC = () => {
              </button>
           </div>
 
-          <button onClick={() => setScheduleModalOpen(true)} className="bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-xl font-semibold shadow-sm transition-all flex items-center gap-2">
-            <span>📅</span> Schedule
-          </button>
-          <button onClick={() => handleOpenCreate('VACCINATION')} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl font-semibold shadow-sm transition-all flex items-center gap-2">
-            <span>💉</span> Vaccinate
-          </button>
-          <button onClick={() => handleOpenCreate('MORTALITY')} className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-xl font-semibold shadow-sm transition-all flex items-center gap-2">
-            <span>💀</span> Report Death
-          </button>
-           <button onClick={() => handleOpenCreate('CHECKUP')} className="bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-xl font-semibold shadow-sm transition-all flex items-center gap-2">
-            <span>+</span> Record
-          </button>
+          {!isReadOnly && (
+            <>
+              <button onClick={() => setScheduleModalOpen(true)} className="bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-xl font-semibold shadow-sm transition-all flex items-center gap-2">
+                <span>📅</span> Schedule
+              </button>
+              <button onClick={() => handleOpenCreate('VACCINATION')} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl font-semibold shadow-sm transition-all flex items-center gap-2">
+                <span>💉</span> Vaccinate
+              </button>
+              <button onClick={() => handleOpenCreate('MORTALITY')} className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-xl font-semibold shadow-sm transition-all flex items-center gap-2">
+                <span>💀</span> Report Death
+              </button>
+              <button onClick={() => handleOpenCreate('CHECKUP')} className="bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-xl font-semibold shadow-sm transition-all flex items-center gap-2">
+                <span>+</span> Record
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -442,7 +457,7 @@ const HealthManagement: React.FC = () => {
                     </div>
                     <div className="flex gap-2">
                       <button onClick={() => setDiagnosisResult(null)} className="text-xs font-bold text-white/50 hover:text-white bg-white/10 px-3 py-1.5 rounded-lg">Dismiss</button>
-                      <button onClick={saveAIDiagnosis} className="text-xs font-bold text-teal-950 bg-teal-400 hover:bg-teal-300 px-3 py-1.5 rounded-lg">Save Record</button>
+                      {!isReadOnly && <button onClick={saveAIDiagnosis} className="text-xs font-bold text-teal-950 bg-teal-400 hover:bg-teal-300 px-3 py-1.5 rounded-lg">Save Record</button>}
                     </div>
                  </div>
                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
@@ -466,12 +481,14 @@ const HealthManagement: React.FC = () => {
         <div className="lg:col-span-1 bg-white rounded-3xl border border-slate-100 shadow-sm p-6 flex flex-col">
             <div className="flex justify-between items-center mb-4">
               <h3 className="font-bold text-slate-800 flex items-center gap-2">📅 Schedule <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">{upcomingVaccinations.length}</span></h3>
-              <button 
-                onClick={() => setScheduleModalOpen(true)}
-                className="text-xs font-bold text-teal-600 hover:text-teal-700 underline"
-              >
-                Manage
-              </button>
+              {!isReadOnly && (
+                <button 
+                  onClick={() => setScheduleModalOpen(true)}
+                  className="text-xs font-bold text-teal-600 hover:text-teal-700 underline"
+                >
+                  Manage
+                </button>
+              )}
             </div>
             
             <div className="flex-1 overflow-y-auto space-y-3 max-h-[220px] pr-1">
@@ -496,14 +513,16 @@ const HealthManagement: React.FC = () => {
                           <span>{vac.date}</span>
                         </div>
                         
-                        <div className="absolute inset-0 bg-white/90 hidden group-hover:flex items-center justify-center gap-2 rounded-xl transition-all">
-                           <button 
-                             onClick={() => handleEdit(vac)}
-                             className="px-3 py-1 bg-teal-600 text-white text-xs font-bold rounded-lg shadow-sm hover:bg-teal-700"
-                           >
-                             Execute
-                           </button>
-                        </div>
+                        {!isReadOnly && (
+                          <div className="absolute inset-0 bg-white/90 hidden group-hover:flex items-center justify-center gap-2 rounded-xl transition-all">
+                             <button 
+                               onClick={() => handleEdit(vac)}
+                               className="px-3 py-1 bg-teal-600 text-white text-xs font-bold rounded-lg shadow-sm hover:bg-teal-700"
+                             >
+                               Execute
+                             </button>
+                          </div>
+                        )}
                      </div>
                    );
                 })
@@ -511,7 +530,7 @@ const HealthManagement: React.FC = () => {
                 <div className="h-full flex flex-col items-center justify-center text-center p-4 text-slate-400">
                   <span className="text-2xl mb-2">✅</span>
                   <p className="text-sm">No pending vaccinations.</p>
-                  <button onClick={() => setScheduleModalOpen(true)} className="text-xs text-teal-600 font-bold mt-2">Add Schedule</button>
+                  {!isReadOnly && <button onClick={() => setScheduleModalOpen(true)} className="text-xs text-teal-600 font-bold mt-2">Add Schedule</button>}
                 </div>
               )}
             </div>
@@ -549,22 +568,24 @@ const HealthManagement: React.FC = () => {
                          </span>
                          <div className="flex items-center gap-2">
                              <span className="text-xs text-slate-400 font-medium">{record.date}</span>
-                             <div className="hidden group-hover:flex gap-1 ml-1 animate-in fade-in duration-200">
-                               <button 
-                                 onClick={() => handleEdit(record)}
-                                 className="w-6 h-6 flex items-center justify-center rounded bg-slate-100 text-slate-500 hover:bg-teal-100 hover:text-teal-600 transition-colors"
-                                 title="Edit"
-                               >
-                                 ✎
-                               </button>
-                               <button 
-                                 onClick={() => handleDeleteClick(record.id)}
-                                 className="w-6 h-6 flex items-center justify-center rounded bg-slate-100 text-slate-500 hover:bg-red-100 hover:text-red-600 transition-colors"
-                                 title="Delete"
-                               >
-                                 🗑
-                               </button>
-                             </div>
+                             {!isReadOnly && (
+                               <div className="hidden group-hover:flex gap-1 ml-1 animate-in fade-in duration-200">
+                                 <button 
+                                   onClick={() => handleEdit(record)}
+                                   className="w-6 h-6 flex items-center justify-center rounded bg-slate-100 text-slate-500 hover:bg-teal-100 hover:text-teal-600 transition-colors"
+                                   title="Edit"
+                                 >
+                                   ✎
+                                 </button>
+                                 <button 
+                                   onClick={() => handleDeleteClick(record.id)}
+                                   className="w-6 h-6 flex items-center justify-center rounded bg-slate-100 text-slate-500 hover:bg-red-100 hover:text-red-600 transition-colors"
+                                   title="Delete"
+                                 >
+                                   🗑
+                                 </button>
+                               </div>
+                             )}
                          </div>
                       </div>
                       
@@ -638,22 +659,24 @@ const HealthManagement: React.FC = () => {
                            </span>
                          </td>
                          <td className="px-6 py-4 text-right">
-                           <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                             <button 
-                               onClick={() => handleEdit(record)}
-                               className="p-1.5 rounded bg-slate-100 text-slate-500 hover:bg-teal-100 hover:text-teal-600"
-                               title="Edit"
-                             >
-                               ✎
-                             </button>
-                             <button 
-                               onClick={() => handleDeleteClick(record.id)}
-                               className="p-1.5 rounded bg-slate-100 text-slate-500 hover:bg-red-100 hover:text-red-600"
-                               title="Delete"
-                             >
-                               🗑
-                             </button>
-                           </div>
+                           {!isReadOnly ? (
+                             <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                               <button 
+                                 onClick={() => handleEdit(record)}
+                                 className="p-1.5 rounded bg-slate-100 text-slate-500 hover:bg-teal-100 hover:text-teal-600"
+                                 title="Edit"
+                               >
+                                 ✎
+                               </button>
+                               <button 
+                                 onClick={() => handleDeleteClick(record.id)}
+                                 className="p-1.5 rounded bg-slate-100 text-slate-500 hover:bg-red-100 hover:text-red-600"
+                                 title="Delete"
+                               >
+                                 🗑
+                               </button>
+                             </div>
+                           ) : <span className="text-xs text-slate-400">View Only</span>}
                          </td>
                        </tr>
                      );
@@ -673,7 +696,7 @@ const HealthManagement: React.FC = () => {
       </div>
 
       {/* 6. Dynamic Modal (Create/Edit) */}
-      {isModalOpen && (
+      {isModalOpen && !isReadOnly && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
           <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto">
              <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
@@ -894,7 +917,7 @@ const HealthManagement: React.FC = () => {
       
       {/* ... (Delete Modal remains the same) ... */}
        {/* 7. Schedule Manager Modal */}
-      {scheduleModalOpen && (
+      {scheduleModalOpen && !isReadOnly && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
           <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
              <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
@@ -1011,7 +1034,7 @@ const HealthManagement: React.FC = () => {
       )}
 
       {/* 8. Delete Confirmation Modal */}
-      {deleteModalOpen && (
+      {deleteModalOpen && !isReadOnly && (
         <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
           <div className="bg-white rounded-3xl w-full max-w-sm shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200 p-6 text-center">
             <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4 text-3xl">

@@ -1,10 +1,11 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import StatCard from '../components/StatCard';
 import { useInventory } from '../context/InventoryContext';
 import { useNotification } from '../context/NotificationContext';
 import { Task } from '../types';
+import { supabase } from '../lib/supabaseClient';
 
 // --- Types ---
 interface PerformanceReview {
@@ -30,71 +31,58 @@ interface LeaveRequest {
   status: 'PENDING' | 'APPROVED' | 'REJECTED';
 }
 
-// --- Mock Data ---
-const MOCK_EMPLOYEES = [
-  { id: 'E001', name: 'John Doe', role: 'Farm Manager', status: 'ACTIVE', phone: '+233 20 123 4567', salary: 15000, joinedDate: '2023-01-15', avatar: 'JD' },
-  { id: 'E002', name: 'Ama Mensah', role: 'Veterinarian', status: 'ACTIVE', phone: '+233 24 987 6543', salary: 8000, joinedDate: '2023-03-10', avatar: 'AM' },
-  { id: 'E003', name: 'Kwame Osei', role: 'Farm Hand', status: 'ON_LEAVE', phone: '+233 27 555 0192', salary: 3500, joinedDate: '2023-06-01', avatar: 'KO' },
-  { id: 'E004', name: 'Sarah Boateng', role: 'Accountant', status: 'ACTIVE', phone: '+233 50 222 3333', salary: 5000, joinedDate: '2023-02-20', avatar: 'SB' },
-  { id: 'E005', name: 'Yaw Asare', role: 'Security', status: 'ACTIVE', phone: '+233 26 444 5555', salary: 1800, joinedDate: '2023-01-01', avatar: 'YA' },
-];
-
-const MOCK_PAYROLL = [
-  { id: 'P001', date: '2024-05-31', employee: 'John Doe', gross: 15000, tax: 3200, net: 11800, status: 'PAID' },
-  { id: 'P002', date: '2024-05-31', employee: 'Ama Mensah', gross: 8000, tax: 1150, net: 6850, status: 'PAID' },
-  { id: 'P003', date: '2024-05-31', employee: 'Kwame Osei', gross: 3500, tax: 225, net: 3275, status: 'PAID' },
-  { id: 'P004', date: '2024-05-31', employee: 'Sarah Boateng', gross: 5000, tax: 500, net: 4500, status: 'PAID' },
-  { id: 'P005', date: '2024-05-31', employee: 'Yaw Asare', gross: 1800, tax: 0, net: 1800, status: 'PAID' },
-];
-
-const MOCK_REVIEWS: PerformanceReview[] = [
-  { id: 'R001', employeeId: 'E001', employeeName: 'John Doe', date: '2024-04-15', rating: 5, feedback: 'Excellent leadership during the recent outbreak response. Kept the team calm and focused.', goals: 'Reduce overall feed waste by 5% in Q3.', reviewer: 'Board of Directors' },
-  { id: 'R002', employeeId: 'E003', employeeName: 'Kwame Osei', date: '2024-03-10', rating: 3, feedback: 'Good handling of birds, but punctuality has been an issue this month.', goals: 'Arrive on time. Complete advanced safety training.', reviewer: 'John Doe' },
-  { id: 'R003', employeeId: 'E002', employeeName: 'Ama Mensah', date: '2024-01-20', rating: 4, feedback: 'Very thorough with diagnostic reports. Need to improve turnaround time on lab results.', goals: 'Digitize all health records by Q2.', reviewer: 'John Doe' },
-];
-
-const MOCK_LEAVE_REQUESTS: LeaveRequest[] = [
-  { id: 'L001', employeeId: 'E003', employeeName: 'Kwame Osei', type: 'SICK', startDate: '2024-06-01', endDate: '2024-06-03', days: 3, reason: 'Malaria treatment', status: 'APPROVED' },
-  { id: 'L002', employeeId: 'E002', employeeName: 'Ama Mensah', type: 'VACATION', startDate: '2024-07-10', endDate: '2024-07-20', days: 10, reason: 'Annual Leave', status: 'PENDING' },
-];
+interface RolePermission {
+  id: string;
+  name: string; // Role Name
+  permissions: Record<string, string>; // e.g., { inventory: 'read', health: 'write' }
+}
 
 // Progressive Income Tax Calculator
 const calculateIncomeTax = (gross: number) => {
+  const safeGross = Number(gross) || 0;
   let tax = 0;
-  if (gross <= 2000) return 0;
+  if (safeGross <= 2000) return 0;
   
-  const taxable15 = Math.min(gross - 2000, 2000);
+  const taxable15 = Math.min(safeGross - 2000, 2000);
   tax += taxable15 * 0.15;
-  if (gross <= 4000) return tax;
+  if (safeGross <= 4000) return tax;
 
-  const taxable20 = Math.min(gross - 4000, 3000);
+  const taxable20 = Math.min(safeGross - 4000, 3000);
   tax += taxable20 * 0.20;
-  if (gross <= 7000) return tax;
+  if (safeGross <= 7000) return tax;
 
-  const taxable25 = Math.min(gross - 7000, 3000);
+  const taxable25 = Math.min(safeGross - 7000, 3000);
   tax += taxable25 * 0.25;
-  if (gross <= 10000) return tax;
+  if (safeGross <= 10000) return tax;
 
-  const taxable30 = Math.min(gross - 10000, 4000);
+  const taxable30 = Math.min(safeGross - 10000, 4000);
   tax += taxable30 * 0.30;
-  if (gross <= 14000) return tax;
+  if (safeGross <= 14000) return tax;
 
-  const taxable35 = gross - 14000;
+  const taxable35 = safeGross - 14000;
   tax += taxable35 * 0.35;
 
   return tax;
 };
 
+const MODULES = ['health', 'flock', 'inventory', 'finance', 'sales', 'production', 'feed', 'hr'];
+
 const HRManagement: React.FC = () => {
-  const { addTransaction, tasks, addTask, deleteTask, updateTask } = useInventory();
+  const { addTransaction, tasks, addTask, deleteTask, updateTask, flocks } = useInventory();
   const { addNotification } = useNotification();
   const navigate = useNavigate();
   
-  const [employees, setEmployees] = useState(MOCK_EMPLOYEES);
-  const [payrollHistory, setPayrollHistory] = useState(MOCK_PAYROLL);
-  const [reviews, setReviews] = useState<PerformanceReview[]>(MOCK_REVIEWS);
-  const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>(MOCK_LEAVE_REQUESTS);
-  const [activeTab, setActiveTab] = useState<'DIRECTORY' | 'PAYROLL' | 'TASKS' | 'PERFORMANCE' | 'LEAVE'>('DIRECTORY');
+  // Initialized as empty arrays
+  const [employees, setEmployees] = useState<any[]>([]);
+  const [payrollHistory, setPayrollHistory] = useState<any[]>([]);
+  const [reviews, setReviews] = useState<PerformanceReview[]>([]);
+  const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
+  
+  // Access Control State
+  const [roles, setRoles] = useState<RolePermission[]>([]);
+  const [loadingRoles, setLoadingRoles] = useState(false);
+  
+  const [activeTab, setActiveTab] = useState<'DIRECTORY' | 'PAYROLL' | 'TASKS' | 'PERFORMANCE' | 'LEAVE' | 'ACCESS'>('DIRECTORY');
   
   // Modals
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -105,7 +93,7 @@ const HRManagement: React.FC = () => {
   
   // Forms
   const [newEmployee, setNewEmployee] = useState({ name: '', role: 'Farm Hand', phone: '', salary: '' });
-  const [newTask, setNewTask] = useState({ title: '', assignee: '', priority: 'MEDIUM' as const, due: '' });
+  const [newTask, setNewTask] = useState({ title: '', assignee: '', priority: 'MEDIUM' as const, due: '', flockId: '' });
   const [reviewForm, setReviewForm] = useState({
       employeeId: '',
       date: new Date().toISOString().split('T')[0],
@@ -122,10 +110,26 @@ const HRManagement: React.FC = () => {
       reason: ''
   });
 
+  // Fetch Roles on Load if Access Tab active
+  useEffect(() => {
+    if (activeTab === 'ACCESS') {
+      fetchRoles();
+    }
+  }, [activeTab]);
+
+  const fetchRoles = async () => {
+    setLoadingRoles(true);
+    const { data, error } = await supabase.from('roles').select('*').order('name');
+    if (data) {
+      setRoles(data);
+    }
+    setLoadingRoles(false);
+  };
+
   // Stats
   const totalStaff = employees.length;
   const activeEmployees = employees.filter(e => e.status === 'ACTIVE');
-  const totalPayrollGross = employees.reduce((sum, e) => sum + e.salary, 0);
+  const totalPayrollGross = employees.reduce((sum, e) => sum + (Number(e.salary) || 0), 0);
   
   // Performance Stats
   const avgRating = reviews.length > 0 
@@ -134,11 +138,13 @@ const HRManagement: React.FC = () => {
   
   // Calculations for Run Payroll Modal
   const payrollPreview = activeEmployees.map(e => {
-      const tax = calculateIncomeTax(e.salary);
+      const salary = Number(e.salary) || 0;
+      const tax = calculateIncomeTax(salary);
       return {
           ...e,
+          salary, // Ensure it's a number
           calculatedTax: tax,
-          netPay: e.salary - tax
+          netPay: salary - tax
       };
   });
 
@@ -156,7 +162,7 @@ const HRManagement: React.FC = () => {
       role: newEmployee.role,
       status: 'ACTIVE',
       phone: newEmployee.phone,
-      salary: Number(newEmployee.salary),
+      salary: Number(newEmployee.salary) || 0,
       joinedDate: new Date().toISOString().split('T')[0],
       avatar: newEmployee.name.split(' ').map(n => n[0]).join('').toUpperCase().substring(0, 2)
     };
@@ -189,24 +195,37 @@ const HRManagement: React.FC = () => {
           status: 'PAID'
       }));
 
-      // Create linked financial transaction
+      // 1. Log Net Salary Expense (Cash Outflow)
       addTransaction({
-          id: `EXP-${batchId}`,
+          id: `EXP-SALARY-${batchId}`,
           date: today,
-          description: `Payroll Run: ${monthName} (${activeEmployees.length} Staff)`,
+          description: `Payroll Net Payout: ${monthName} (${activeEmployees.length} Staff)`,
           amount: totalRunNet, 
-          withholdingAmount: totalRunTax,
+          withholdingAmount: totalRunTax, // Linked for tax reporting reference
           type: 'EXPENSE',
           category: 'LABOR',
           status: 'COMPLETED',
           referenceId: batchId
       });
 
+      // 2. Log Tax Liability (Pending Payment)
+      if (totalRunTax > 0) {
+          addTransaction({
+              id: `EXP-TAX-${batchId}`,
+              date: today,
+              description: `Payroll Tax Liability: ${monthName}`,
+              amount: totalRunTax,
+              type: 'EXPENSE', // Logged as expense accrual
+              category: 'LABOR', // Part of total labor cost
+              status: 'PENDING', // Outstanding liability
+              referenceId: batchId
+          });
+      }
+
       setPayrollHistory([...newRecords, ...payrollHistory]);
       setIsPayrollModalOpen(false);
       
-      // Use Notification instead of confirm alert
-      addNotification('SUCCESS', 'Payroll Processed Successfully', `Net Payout: $${totalRunNet.toLocaleString()} | Tax: $${totalRunTax.toLocaleString()}`);
+      addNotification('SUCCESS', 'Payroll Processed', `Net Payout: $${totalRunNet.toLocaleString()} | Tax Accrued: $${totalRunTax.toLocaleString()}`);
   };
 
   const handleAddTask = (e: React.FormEvent) => {
@@ -217,11 +236,12 @@ const HRManagement: React.FC = () => {
           assignee: newTask.assignee || 'Unassigned',
           priority: newTask.priority,
           status: 'PENDING',
-          due: newTask.due || new Date().toISOString().split('T')[0]
+          due: newTask.due || new Date().toISOString().split('T')[0],
+          flockId: newTask.flockId || undefined
       };
       addTask(task);
       setIsTaskModalOpen(false);
-      setNewTask({ title: '', assignee: '', priority: 'MEDIUM', due: '' });
+      setNewTask({ title: '', assignee: '', priority: 'MEDIUM', due: '', flockId: '' });
       addNotification('INFO', 'Task Assigned', `Task "${task.title}" created.`);
   };
 
@@ -310,6 +330,37 @@ const HRManagement: React.FC = () => {
       }
   };
 
+  // --- Access Control Handlers ---
+  const handleCreateRole = async () => {
+    const roleName = prompt("Enter new Role Name:");
+    if (!roleName) return;
+    
+    const { error } = await supabase.from('roles').insert({ name: roleName.toUpperCase(), permissions: {} });
+    if (error) {
+      addNotification('ERROR', 'Failed to create role', error.message);
+    } else {
+      addNotification('SUCCESS', 'Role Created', `${roleName} added.`);
+      fetchRoles();
+    }
+  };
+
+  const handleUpdatePermission = async (roleId: string, module: string, type: 'read' | 'write' | 'none') => {
+    const role = roles.find(r => r.id === roleId);
+    if (!role) return;
+
+    const newPermissions = { ...role.permissions, [module]: type };
+    if (type === 'none') delete newPermissions[module];
+
+    // Optimistic Update
+    setRoles(roles.map(r => r.id === roleId ? { ...r, permissions: newPermissions } : r));
+
+    const { error } = await supabase.from('roles').update({ permissions: newPermissions }).eq('id', roleId);
+    if (error) {
+      addNotification('ERROR', 'Update Failed', error.message);
+      fetchRoles(); // Revert
+    }
+  };
+
   return (
     <div className="space-y-8 animate-in fade-in duration-500 pb-20">
       {/* Header */}
@@ -337,7 +388,7 @@ const HRManagement: React.FC = () => {
       <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden min-h-[500px] flex flex-col">
         {/* Tabs */}
         <div className="flex border-b border-slate-100 overflow-x-auto">
-           {(['DIRECTORY', 'PAYROLL', 'LEAVE', 'TASKS', 'PERFORMANCE'] as const).map(tab => (
+           {(['DIRECTORY', 'PAYROLL', 'LEAVE', 'TASKS', 'PERFORMANCE', 'ACCESS'] as const).map(tab => (
              <button
                key={tab}
                onClick={() => setActiveTab(tab)}
@@ -346,6 +397,7 @@ const HRManagement: React.FC = () => {
                {tab === 'DIRECTORY' ? 'Team Directory' : 
                 tab === 'PAYROLL' ? 'Payroll History' : 
                 tab === 'LEAVE' ? 'Leave Requests' :
+                tab === 'ACCESS' ? 'Access Control Matrix' :
                 tab === 'TASKS' ? 'Task Board' : 'Performance Reviews'}
              </button>
            ))}
@@ -368,7 +420,8 @@ const HRManagement: React.FC = () => {
                  </thead>
                  <tbody className="divide-y divide-slate-50 text-sm">
                    {employees.map(emp => {
-                     const estimatedTax = calculateIncomeTax(emp.salary);
+                     const salary = Number(emp.salary) || 0;
+                     const estimatedTax = calculateIncomeTax(salary);
                      return (
                      <tr key={emp.id} className="hover:bg-slate-50 transition-colors group">
                        <td className="px-4 py-4">
@@ -391,11 +444,11 @@ const HRManagement: React.FC = () => {
                          </span>
                        </td>
                        <td className="px-4 py-4 text-slate-600 font-mono text-xs">{emp.phone}</td>
-                       <td className="px-4 py-4 font-medium text-slate-800">${emp.salary.toLocaleString()}</td>
+                       <td className="px-4 py-4 font-medium text-slate-800">${salary.toLocaleString()}</td>
                        <td className="px-4 py-4 text-slate-500">
                            ${estimatedTax.toLocaleString()}
                            <span className="text-[10px] text-slate-400 ml-1">
-                               ({((estimatedTax/emp.salary)*100).toFixed(1)}%)
+                               ({salary > 0 ? ((estimatedTax/salary)*100).toFixed(1) : 0}%)
                            </span>
                        </td>
                        <td className="px-4 py-4 text-right">
@@ -408,8 +461,75 @@ const HRManagement: React.FC = () => {
                        </td>
                      </tr>
                    )})}
+                   {employees.length === 0 && (
+                        <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400 italic">No employees found.</td></tr>
+                   )}
                  </tbody>
                </table>
+             </div>
+           )}
+
+           {activeTab === 'ACCESS' && (
+             <div className="flex flex-col h-full space-y-4">
+               <div className="flex justify-between items-center bg-slate-50 p-4 rounded-xl border border-slate-100">
+                  <div>
+                      <h4 className="font-bold text-slate-800">Role-Based Access Control (RBAC)</h4>
+                      <p className="text-xs text-slate-500">Define system permissions per role.</p>
+                  </div>
+                  <button 
+                      onClick={handleCreateRole}
+                      className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-xl font-bold shadow-lg shadow-indigo-500/20 transition-all flex items-center gap-2 text-sm"
+                  >
+                      <span>➕</span> Create New Role
+                  </button>
+               </div>
+
+               {loadingRoles ? (
+                 <div className="text-center py-10 text-slate-400">Loading Access Matrix...</div>
+               ) : (
+                 <div className="overflow-x-auto rounded-xl border border-slate-100">
+                   <table className="w-full text-left">
+                     <thead className="bg-slate-50 text-slate-500 text-[10px] uppercase font-bold tracking-widest sticky left-0">
+                       <tr>
+                         <th className="px-4 py-3 border-b border-r border-slate-200 bg-slate-50 sticky left-0 min-w-[150px] z-10">Module / Feature</th>
+                         {roles.map(role => (
+                           <th key={role.id} className="px-4 py-3 border-b border-slate-200 text-center min-w-[120px]">{role.name}</th>
+                         ))}
+                       </tr>
+                     </thead>
+                     <tbody className="divide-y divide-slate-100 text-sm">
+                       {MODULES.map(module => (
+                         <tr key={module} className="hover:bg-slate-50 transition-colors">
+                           <td className="px-4 py-3 font-bold text-slate-700 border-r border-slate-100 capitalize bg-white sticky left-0 z-10">{module}</td>
+                           {roles.map(role => {
+                             const perm = role.permissions?.[module] || 'none';
+                             return (
+                               <td key={`${role.id}-${module}`} className="px-4 py-3 text-center">
+                                 <select 
+                                   value={perm}
+                                   onChange={(e) => handleUpdatePermission(role.id, module, e.target.value as any)}
+                                   className={`text-xs font-bold rounded px-2 py-1 uppercase outline-none border ${
+                                     perm === 'write' ? 'bg-emerald-100 text-emerald-700 border-emerald-200' :
+                                     perm === 'read' ? 'bg-blue-100 text-blue-700 border-blue-200' :
+                                     'bg-slate-100 text-slate-400 border-slate-200'
+                                   }`}
+                                 >
+                                   <option value="none">--</option>
+                                   <option value="read">Read</option>
+                                   <option value="write">Write</option>
+                                 </select>
+                               </td>
+                             );
+                           })}
+                         </tr>
+                       ))}
+                     </tbody>
+                   </table>
+                 </div>
+               )}
+               <div className="bg-amber-50 p-3 rounded-lg border border-amber-100 text-xs text-amber-800">
+                 <strong>Note:</strong> Changes to permissions are saved automatically but may require users to re-login to take full effect in complex scenarios.
+               </div>
              </div>
            )}
 
@@ -463,6 +583,9 @@ const HRManagement: React.FC = () => {
                             </td>
                         </tr>
                         ))}
+                        {payrollHistory.length === 0 && (
+                            <tr><td colSpan={6} className="px-6 py-8 text-center text-slate-400 italic">No payroll history found.</td></tr>
+                        )}
                     </tbody>
                     </table>
                 </div>
@@ -581,7 +704,9 @@ const HRManagement: React.FC = () => {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {tasks.map(task => (
+                    {tasks.map(task => {
+                        const linkedFlock = flocks.find(f => f.id === task.flockId);
+                        return (
                         <div key={task.id} className="bg-slate-50/50 rounded-2xl p-4 border border-slate-100 hover:border-blue-200 transition-colors flex flex-col justify-between group">
                             <div className="mb-3">
                                 <div className="flex justify-between items-start mb-2">
@@ -595,10 +720,17 @@ const HRManagement: React.FC = () => {
                                     <button onClick={() => handleDeleteTask(task.id)} className="text-slate-300 hover:text-red-500 transition-colors">✕</button>
                                 </div>
                                 <h4 className="font-bold text-slate-800">{task.title}</h4>
-                                <div className="text-xs text-slate-500 mt-1 flex gap-2">
+                                <div className="text-xs text-slate-500 mt-1 flex gap-2 flex-wrap">
                                     <span>👤 {task.assignee}</span>
                                     <span>📅 Due: {task.due}</span>
                                 </div>
+                                {linkedFlock && (
+                                    <div className="mt-2 pt-2 border-t border-slate-200/50">
+                                        <span className="text-[10px] font-bold text-teal-600 bg-teal-50 px-2 py-1 rounded-md flex items-center gap-1 w-fit">
+                                            <span>🐣</span> {linkedFlock.name}
+                                        </span>
+                                    </div>
+                                )}
                             </div>
                             <div className="pt-3 border-t border-slate-200 flex justify-between items-center">
                                 <span className={`text-xs font-bold ${
@@ -616,7 +748,7 @@ const HRManagement: React.FC = () => {
                                 </button>
                             </div>
                         </div>
-                    ))}
+                    )})}
                     {tasks.length === 0 && (
                         <div className="col-span-full py-12 text-center text-slate-400 italic bg-slate-50 rounded-2xl border border-dashed border-slate-200">
                            No tasks assigned.
@@ -801,6 +933,19 @@ const HRManagement: React.FC = () => {
                   <option value="">-- Select Employee --</option>
                   {activeEmployees.map(emp => (
                       <option key={emp.id} value={emp.name}>{emp.name} ({emp.role})</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Related Flock (Optional)</label>
+                <select
+                  className="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none"
+                  value={newTask.flockId}
+                  onChange={e => setNewTask({...newTask, flockId: e.target.value})}
+                >
+                  <option value="">-- General Task --</option>
+                  {flocks.map(f => (
+                    <option key={f.id} value={f.id}>{f.name}</option>
                   ))}
                 </select>
               </div>
@@ -1067,6 +1212,11 @@ const HRManagement: React.FC = () => {
                                         </td>
                                     </tr>
                                 ))}
+                                {payrollPreview.length === 0 && (
+                                    <tr>
+                                        <td colSpan={4} className="px-4 py-4 text-center text-slate-400 italic">No employees available for payroll.</td>
+                                    </tr>
+                                )}
                             </tbody>
                         </table>
                     </div>
@@ -1096,7 +1246,8 @@ const HRManagement: React.FC = () => {
                     </button>
                     <button 
                         onClick={handleRunPayroll}
-                        className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-bold shadow-lg shadow-emerald-500/20 transition-all"
+                        disabled={payrollPreview.length === 0}
+                        className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded-xl font-bold shadow-lg shadow-emerald-500/20 transition-all"
                     >
                         Confirm Payout & Deduct
                     </button>

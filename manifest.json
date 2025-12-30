@@ -1,0 +1,21 @@
+
+{
+  "name": "Awra ERP",
+  "short_name": "AwraERP",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#0f766e",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/2674/2674063.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/2674/2674063.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

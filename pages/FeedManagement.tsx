@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo } from 'react';
-import { MOCK_FLOCKS, FEED_SCHEDULE_DATA } from '../constants';
+import { FEED_SCHEDULE_DATA } from '../constants';
 import { InventoryItem, FeedConsumption } from '../types';
 import StatCard from '../components/StatCard';
 import { useInventory } from '../context/InventoryContext';
@@ -12,7 +12,7 @@ import {
 const COLORS = ['#0f766e', '#f59e0b', '#3b82f6', '#ef4444', '#8b5cf6'];
 
 const FeedManagement: React.FC = () => {
-  const { items, adjustStock, consumptionRecords, addTransaction } = useInventory();
+  const { items, adjustStock, consumptionRecords, addTransaction, flocks } = useInventory();
   const inventory = items.filter(item => item.category === 'FEED');
   
   const [isRestockModalOpen, setIsRestockModalOpen] = useState(false);
@@ -74,7 +74,7 @@ const FeedManagement: React.FC = () => {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <StatCard label="Total Feed in Stock" value={`${totalStock} Bags`} icon="🌾" color="bg-teal-500" />
-        <StatCard label="Daily Avg. Consumption" value="655 kg" trend={{ value: 5.2, positive: false }} icon="🍽️" color="bg-amber-500" />
+        <StatCard label="Daily Avg. Consumption" value="--- kg" trend={{ value: 0, positive: false }} icon="🍽️" color="bg-amber-500" />
         <StatCard label="Low Stock Alerts" value={lowStockCount} icon="⚠️" color={lowStockCount > 0 ? "bg-red-500" : "bg-emerald-500"} />
       </div>
 
@@ -128,6 +128,9 @@ const FeedManagement: React.FC = () => {
                   </div>
                 );
               })}
+              {inventory.length === 0 && (
+                  <div className="col-span-2 text-center text-slate-400 italic py-10">No feed items in inventory. Add stock to begin.</div>
+              )}
             </div>
           </div>
 
@@ -156,7 +159,7 @@ const FeedManagement: React.FC = () => {
                       <tr key={log.id} className="hover:bg-slate-50 transition-colors">
                         <td className="px-6 py-4 font-medium text-slate-600">{log.date}</td>
                         <td className="px-6 py-4 font-bold text-slate-800">
-                          {MOCK_FLOCKS.find(f => f.id === log.flockId)?.name || log.flockId}
+                          {flocks.find(f => f.id === log.flockId)?.name || log.flockId}
                         </td>
                         <td className="px-6 py-4 text-slate-500">
                           {feedItem?.name || log.feedItemId}
@@ -320,6 +323,7 @@ const FeedManagement: React.FC = () => {
             onClose={() => setIsReportOpen(false)} 
             records={consumptionRecords}
             inventory={inventory}
+            flocks={flocks}
         />
       )}
     </div>
@@ -360,6 +364,7 @@ const RestockForm: React.FC<{
                     onChange={e => setSelectedId(e.target.value)}
                     disabled={!!preSelectedItem}
                 >
+                  <option value="">-- Select --</option>
                   {inventory.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
                 </select>
               </div>
@@ -408,7 +413,8 @@ const ConsumptionReportModal: React.FC<{
     onClose: () => void;
     records: FeedConsumption[];
     inventory: InventoryItem[];
-}> = ({ onClose, records, inventory }) => {
+    flocks: any[];
+}> = ({ onClose, records, inventory, flocks }) => {
     const today = new Date().toISOString().split('T')[0];
     const monthAgo = new Date();
     monthAgo.setDate(monthAgo.getDate() - 30);
@@ -542,7 +548,7 @@ const ConsumptionReportModal: React.FC<{
                             <tbody className="divide-y divide-slate-100 text-sm">
                                 {filteredRecords.map(log => {
                                     const feedName = inventory.find(i => i.id === log.feedItemId)?.name || log.feedItemId;
-                                    const flockName = MOCK_FLOCKS.find(f => f.id === log.flockId)?.name || log.flockId;
+                                    const flockName = flocks.find(f => f.id === log.flockId)?.name || log.flockId;
                                     return (
                                         <tr key={log.id} className="hover:bg-slate-50 transition-colors">
                                             <td className="px-6 py-3 text-slate-600 font-mono">{log.date}</td>

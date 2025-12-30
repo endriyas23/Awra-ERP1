@@ -29,9 +29,14 @@ const InventoryManagement: React.FC = () => {
     notes: ''
   });
 
+  // --- Access Control Logic ---
+  // RBAC removed: All authenticated users have full access
+  const isReadOnly = false;
+
   // --- Calculations ---
   const totalValue = items.reduce((sum, item) => sum + (item.quantity * (item.pricePerUnit || 0)), 0);
-  const lowStockCount = items.filter(i => i.quantity <= i.minThreshold).length;
+  const lowStockItems = items.filter(i => i.quantity <= i.minThreshold);
+  const lowStockCount = lowStockItems.length;
   const totalSKUs = items.length;
 
   const filteredItems = items.filter(item => {
@@ -44,6 +49,7 @@ const InventoryManagement: React.FC = () => {
   // --- Handlers ---
 
   const handleOpenItemModal = (item?: InventoryItem) => {
+    if (isReadOnly) return;
     if (item) {
       setSelectedItem(item);
       setItemForm({ ...item });
@@ -55,6 +61,7 @@ const InventoryManagement: React.FC = () => {
   };
 
   const handleOpenStockModal = (item: InventoryItem) => {
+    if (isReadOnly) return;
     setSelectedItem(item);
     setStockForm({ action: 'RESTOCK', quantity: 0, cost: '', notes: '' });
     setIsStockModalOpen(true);
@@ -62,6 +69,7 @@ const InventoryManagement: React.FC = () => {
 
   const handleSaveItem = (e: React.FormEvent) => {
     e.preventDefault();
+    if (isReadOnly) return;
     if (selectedItem) {
       // Update
       updateItem(selectedItem.id, itemForm);
@@ -79,7 +87,7 @@ const InventoryManagement: React.FC = () => {
 
   const handleStockAdjustment = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedItem) return;
+    if (!selectedItem || isReadOnly) return;
 
     const qty = Number(stockForm.quantity);
     if (qty <= 0) return;
@@ -115,6 +123,7 @@ const InventoryManagement: React.FC = () => {
   };
 
   const handleDelete = (id: string) => {
+    if (isReadOnly) return;
     if (window.confirm("Are you sure you want to delete this item?")) {
       deleteItem(id);
     }
@@ -128,12 +137,14 @@ const InventoryManagement: React.FC = () => {
           <h2 className="text-3xl font-bold text-slate-900">Inventory Management</h2>
           <p className="text-slate-500 mt-1">Track assets, feed, medicine, and equipment across the farm.</p>
         </div>
-        <button 
-          onClick={() => handleOpenItemModal()}
-          className="bg-teal-600 hover:bg-teal-700 text-white px-5 py-2.5 rounded-xl font-semibold shadow-lg shadow-teal-600/20 transition-all flex items-center gap-2"
-        >
-          <span>+</span> Add New Item
-        </button>
+        {!isReadOnly && (
+          <button 
+            onClick={() => handleOpenItemModal()}
+            className="bg-teal-600 hover:bg-teal-700 text-white px-5 py-2.5 rounded-xl font-semibold shadow-lg shadow-teal-600/20 transition-all flex items-center gap-2"
+          >
+            <span>+</span> Add New Item
+          </button>
+        )}
       </div>
 
       {/* KPI Cards */}
@@ -157,6 +168,66 @@ const InventoryManagement: React.FC = () => {
             color="bg-blue-500" 
         />
       </div>
+
+      {/* Critical Stock Alerts - Suggestion System */}
+      {lowStockItems.length > 0 && (
+        <div className="bg-red-50 border border-red-100 rounded-3xl p-6 animate-in slide-in-from-top-4 shadow-sm">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-10 h-10 bg-red-100 text-red-600 rounded-xl flex items-center justify-center text-xl shadow-sm">⚠️</div>
+            <div>
+              <h3 className="text-lg font-bold text-red-800">Restock Suggestions</h3>
+              <p className="text-xs text-red-600 font-medium">The following items are critically low. Recommended actions:</p>
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {lowStockItems.map(item => {
+              const deficit = item.minThreshold - item.quantity;
+              const suggestedRestock = Math.max(deficit * 2, item.minThreshold * 2); // Simple heuristic: restock to double the min
+              
+              return (
+                <div key={item.id} className="bg-white p-4 rounded-xl border border-red-100 shadow-sm flex flex-col justify-between hover:shadow-md transition-shadow">
+                  <div className="mb-3">
+                    <div className="flex justify-between items-start mb-2">
+                      <span className="font-bold text-slate-800 text-sm line-clamp-1" title={item.name}>{item.name}</span>
+                      <span className="bg-red-100 text-red-700 text-[9px] font-bold px-1.5 py-0.5 rounded uppercase">Critical</span>
+                    </div>
+                    <div className="flex justify-between text-xs text-slate-500 mb-2 bg-slate-50 p-2 rounded-lg">
+                      <div className="text-center">
+                        <span className="block text-[9px] uppercase font-bold text-slate-400">Current</span>
+                        <span className="font-bold text-red-600 text-sm">{item.quantity}</span>
+                      </div>
+                      <div className="text-center border-l border-slate-200 pl-2">
+                        <span className="block text-[9px] uppercase font-bold text-slate-400">Threshold</span>
+                        <span className="font-bold text-slate-700 text-sm">{item.minThreshold}</span>
+                      </div>
+                      <div className="text-center border-l border-slate-200 pl-2">
+                        <span className="block text-[9px] uppercase font-bold text-slate-400">Suggested</span>
+                        <span className="font-bold text-emerald-600 text-sm">+{suggestedRestock}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => {
+                        setSelectedItem(item);
+                        setStockForm({ 
+                            action: 'RESTOCK', 
+                            quantity: suggestedRestock, 
+                            cost: item.pricePerUnit ? (suggestedRestock * item.pricePerUnit).toFixed(2) : '', 
+                            notes: 'Auto-suggestion due to low stock' 
+                        });
+                        setIsStockModalOpen(true);
+                    }}
+                    className="w-full py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold transition-all shadow-red-200 shadow-lg"
+                  >
+                    Order Restock
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Main Content Area */}
       <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden flex flex-col min-h-[500px]">
@@ -209,7 +280,14 @@ const InventoryManagement: React.FC = () => {
                 const value = item.quantity * (item.pricePerUnit || 0);
 
                 return (
-                  <tr key={item.id} className="hover:bg-slate-50/80 transition-colors group">
+                  <tr 
+                    key={item.id} 
+                    className={`transition-colors group ${
+                        isLow 
+                        ? 'bg-red-50/30 border-l-4 border-l-red-500' 
+                        : 'hover:bg-slate-50/80 border-l-4 border-transparent'
+                    }`}
+                  >
                     <td className="px-6 py-4">
                       <div className="font-bold text-slate-800">{item.name}</div>
                       <div className="text-xs text-slate-400 font-mono mt-0.5">{item.id}</div>
@@ -229,7 +307,7 @@ const InventoryManagement: React.FC = () => {
                         <span className={`font-bold ${isLow ? 'text-red-600' : 'text-slate-700'}`}>
                           {item.quantity.toLocaleString()} <span className="text-slate-400 font-normal">{item.unit}</span>
                         </span>
-                        {isLow && <span className="text-red-500 font-bold text-[10px] bg-red-50 px-1.5 rounded">LOW</span>}
+                        {isLow && <span className="text-red-500 font-bold text-[10px] bg-white border border-red-200 px-1.5 rounded">LOW</span>}
                       </div>
                       <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
                         <div 
@@ -246,29 +324,32 @@ const InventoryManagement: React.FC = () => {
                       ${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
                     <td className="px-6 py-4 text-right">
-                       <div className="flex items-center justify-end gap-2 opacity-100 lg:opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button 
-                            onClick={() => handleOpenStockModal(item)}
-                            className="p-2 bg-teal-50 text-teal-600 rounded-lg hover:bg-teal-100 font-bold text-xs"
-                            title="Adjust Stock"
-                          >
-                            Adjust
-                          </button>
-                          <button 
-                            onClick={() => handleOpenItemModal(item)}
-                            className="p-2 bg-slate-100 text-slate-500 rounded-lg hover:bg-slate-200"
-                            title="Edit Details"
-                          >
-                            ✎
-                          </button>
-                          <button 
-                            onClick={() => handleDelete(item.id)}
-                            className="p-2 bg-slate-100 text-slate-500 rounded-lg hover:bg-red-100 hover:text-red-600"
-                            title="Delete"
-                          >
-                            🗑
-                          </button>
-                       </div>
+                       {!isReadOnly && (
+                         <div className="flex items-center justify-end gap-2 opacity-100 lg:opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button 
+                              onClick={() => handleOpenStockModal(item)}
+                              className="p-2 bg-teal-50 text-teal-600 rounded-lg hover:bg-teal-100 font-bold text-xs"
+                              title="Adjust Stock"
+                            >
+                              Adjust
+                            </button>
+                            <button 
+                              onClick={() => handleOpenItemModal(item)}
+                              className="p-2 bg-slate-100 text-slate-500 rounded-lg hover:bg-slate-200"
+                              title="Edit Details"
+                            >
+                              ✎
+                            </button>
+                            <button 
+                              onClick={() => handleDelete(item.id)}
+                              className="p-2 bg-slate-100 text-slate-500 rounded-lg hover:bg-red-100 hover:text-red-600"
+                              title="Delete"
+                            >
+                              🗑
+                            </button>
+                         </div>
+                       )}
+                       {isReadOnly && <span className="text-xs text-slate-400">View Only</span>}
                     </td>
                   </tr>
                 );
@@ -288,7 +369,7 @@ const InventoryManagement: React.FC = () => {
       {/* --- Modals --- */}
 
       {/* 1. Item Modal (Create/Edit) */}
-      {isItemModalOpen && (
+      {isItemModalOpen && !isReadOnly && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
           <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
             <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
@@ -371,7 +452,7 @@ const InventoryManagement: React.FC = () => {
       )}
 
       {/* 2. Stock Adjustment Modal */}
-      {isStockModalOpen && selectedItem && (
+      {isStockModalOpen && selectedItem && !isReadOnly && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
           <div className="bg-white rounded-3xl w-full max-w-sm shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
              <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
