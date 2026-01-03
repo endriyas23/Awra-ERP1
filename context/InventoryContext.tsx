@@ -1,6 +1,6 @@
 
 import React, { createContext, useContext, useState, ReactNode, useEffect, useRef } from 'react';
-import { InventoryItem, FeedConsumption, EggCollectionLog, SaleRecord, FinancialTransaction, Task, Flock, HealthRecord } from '../types';
+import { InventoryItem, FeedConsumption, EggCollectionLog, SaleRecord, FinancialTransaction, Task, Flock, HealthRecord, DailyLog, Customer, SaleStatus, FarmEvent, Employee, PayrollRun } from '../types';
 import { useNotification } from './NotificationContext';
 import { useAuth } from './AuthContext';
 import { supabase } from '../lib/supabaseClient';
@@ -14,40 +14,69 @@ interface InventoryContextType {
   tasks: Task[];
   flocks: Flock[];
   healthRecords: HealthRecord[];
+  dailyLogs: DailyLog[];
+  customers: Customer[];
+  customEvents: FarmEvent[];
+  employees: Employee[];
+  payrollRuns: PayrollRun[];
   
   addItem: (item: InventoryItem) => void;
   updateItem: (id: string, updates: Partial<InventoryItem>) => void;
   deleteItem: (id: string) => void;
-  adjustStock: (id: string, amount: number) => void; 
+  adjustStock: (id: string, amount: number) => Promise<void>; 
   logConsumption: (record: FeedConsumption) => void;
+  updateConsumption: (id: string, updates: Partial<FeedConsumption>) => void;
+  deleteConsumption: (id: string) => void;
+  
   logEggCollection: (log: EggCollectionLog) => void;
+  updateEggLog: (id: string, updates: Partial<EggCollectionLog>) => void;
+  deleteEggLog: (id: string) => void;
+
   addSale: (sale: SaleRecord) => void;
-  updateSaleStatus: (id: string, status: 'PAID' | 'PENDING' | 'CANCELLED') => void;
+  updateSale: (id: string, updates: Partial<SaleRecord>) => void;
+  deleteSale: (id: string) => void;
+  updateSaleStatus: (id: string, status: SaleStatus) => void;
+  
   addTransaction: (transaction: FinancialTransaction) => void;
   updateTransaction: (id: string, updates: Partial<FinancialTransaction>) => void;
   deleteTransaction: (id: string) => void;
+  
   addTask: (task: Task) => void;
   updateTask: (id: string, updates: Partial<Task>) => void;
   deleteTask: (id: string) => void;
   
-  // Flock & Health
   addFlock: (flock: Flock) => void;
   updateFlock: (id: string, updates: Partial<Flock>) => void;
   deleteFlock: (id: string) => void;
   addHealthRecord: (record: HealthRecord) => void;
   updateHealthRecord: (id: string, updates: Partial<HealthRecord>) => void;
   deleteHealthRecord: (id: string) => void;
+
+  addDailyLog: (log: DailyLog) => void;
+  updateDailyLog: (id: string, updates: Partial<DailyLog>) => void;
+  deleteDailyLog: (id: string) => void;
+
+  addCustomer: (customer: Customer) => void;
+  updateCustomer: (id: string, updates: Partial<Customer>) => void;
+  deleteCustomer: (id: string) => void;
+
+  addCustomEvent: (event: FarmEvent) => void;
+  deleteCustomEvent: (id: string) => void;
+
+  addEmployee: (employee: Employee) => void;
+  updateEmployee: (id: string, updates: Partial<Employee>) => void;
+  deleteEmployee: (id: string) => void;
+  
+  addPayrollRun: (run: PayrollRun) => void;
 }
 
 const InventoryContext = createContext<InventoryContextType | undefined>(undefined);
 
 const CACHE_KEY = 'awra_offline_data';
 
-// Helper to recalculate age dynamically
 const calculateFlockAge = (startDate: string, initialAge: number) => {
   const start = new Date(startDate);
   const now = new Date();
-  // Reset hours to ensure clean day difference
   start.setHours(0, 0, 0, 0);
   now.setHours(0, 0, 0, 0);
   const diffTime = now.getTime() - start.getTime();
@@ -67,11 +96,12 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
   const [tasks, setTasks] = useState<Task[]>([]);
   const [flocks, setFlocks] = useState<Flock[]>([]);
   const [healthRecords, setHealthRecords] = useState<HealthRecord[]>([]);
+  const [dailyLogs, setDailyLogs] = useState<DailyLog[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [customEvents, setCustomEvents] = useState<FarmEvent[]>([]);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [payrollRuns, setPayrollRuns] = useState<PayrollRun[]>([]);
 
-  // Prevent duplicate notifications per session
-  const notifiedTasksRef = useRef<Set<string>>(new Set());
-
-  // Helper to save all current state to local storage
   const cacheData = (data: any) => {
     try {
       localStorage.setItem(CACHE_KEY, JSON.stringify(data));
@@ -80,19 +110,15 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     }
   };
 
-  // Helper to load from cache
   const loadFromCache = () => {
     try {
       const cached = localStorage.getItem(CACHE_KEY);
       if (cached) {
         const data = JSON.parse(cached);
-        
-        // Recalculate flock ages on load
         const flocksWithAge = (data.flocks || []).map((f: Flock) => ({
             ...f,
             ageInDays: calculateFlockAge(f.startDate, f.initialAge)
         }));
-
         setFlocks(flocksWithAge);
         setItems(data.items || []);
         setHealthRecords(data.healthRecords || []);
@@ -101,43 +127,122 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         setConsumptionRecords(data.consumptionRecords || []);
         setEggLogs(data.eggLogs || []);
         setTasks(data.tasks || []);
-        addNotification('INFO', 'Offline Mode', 'Loaded data from local cache.');
+        setDailyLogs(data.dailyLogs || []);
+        setCustomers(data.customers || []);
+        setCustomEvents(data.customEvents || []);
+        setEmployees(data.employees || []);
+        setPayrollRuns(data.payrollRuns || []);
       }
     } catch (e) {
       console.error('Failed to load cache', e);
     }
   };
 
-  // --- Fetch Initial Data from Supabase ---
+  // --- Task Reminder Logic ---
+  useEffect(() => {
+    const checkTaskReminders = () => {
+      try {
+        const settingsStr = localStorage.getItem('awra_settings');
+        if (!settingsStr) return;
+        
+        const settings = JSON.parse(settingsStr);
+        // Check if reminders are enabled in settings
+        if (!settings.notifications?.taskReminders) return;
+
+        const reminderDays = settings.notifications.reminderDaysBefore ?? 1;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        // Avoid duplicate alerts per session
+        const notifiedKey = 'awra_notified_tasks';
+        const notifiedTasks = JSON.parse(sessionStorage.getItem(notifiedKey) || '[]');
+        let newNotified = [...notifiedTasks];
+        let hasNew = false;
+
+        tasks.forEach(task => {
+          if (task.status === 'COMPLETED' || newNotified.includes(task.id)) return;
+
+          const dueDate = new Date(task.due);
+          dueDate.setHours(0, 0, 0, 0);
+          
+          const diffTime = dueDate.getTime() - today.getTime();
+          const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+          // Trigger if due date is today or within the next N days
+          // Also trigger for Overdue items (negative diffDays) that haven't been notified this session
+          if (diffDays <= reminderDays) {
+             let message = '';
+             let type: 'WARNING' | 'ERROR' = 'WARNING';
+
+             if (diffDays < 0) {
+                 message = `Task OVERDUE: "${task.title}" was due on ${task.due}.`;
+                 type = 'ERROR';
+             } else if (diffDays === 0) {
+                 message = `Task Due Today: "${task.title}"`;
+             } else {
+                 message = `Upcoming Task: "${task.title}" is due in ${diffDays} day(s).`;
+             }
+             
+             addNotification(type, 'Task Reminder', message);
+             newNotified.push(task.id);
+             hasNew = true;
+          }
+        });
+
+        if (hasNew) {
+          sessionStorage.setItem(notifiedKey, JSON.stringify(newNotified));
+        }
+      } catch (e) {
+        console.warn("Error checking task reminders", e);
+      }
+    };
+
+    // Run check on mount and when tasks change, with a slight delay to ensure settings/data are ready
+    const timer = setTimeout(checkTaskReminders, 2500);
+    return () => clearTimeout(timer);
+  }, [tasks, addNotification]);
+
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [
-          { data: flocksData, error: err1 },
-          { data: inventoryData, error: err2 },
-          { data: healthData, error: err3 },
-          { data: transData, error: err4 },
-          { data: salesData, error: err5 },
-          { data: consData, error: err6 },
-          { data: eggData, error: err7 },
-          { data: taskData, error: err8 }
-        ] = await Promise.all([
-          supabase.from('flocks').select('*'),
-          supabase.from('inventory_items').select('*'),
-          supabase.from('health_records').select('*'),
-          supabase.from('transactions').select('*'),
-          supabase.from('sales').select('*'),
-          supabase.from('consumption_logs').select('*'),
-          supabase.from('egg_logs').select('*'),
-          supabase.from('tasks').select('*')
+        const safeFetch = async (promise: Promise<any>) => {
+            try {
+                return await promise;
+            } catch (err) {
+                return { data: null, error: err };
+            }
+        };
+
+        const results = await Promise.all([
+          safeFetch(supabase.from('flocks').select('*')),
+          safeFetch(supabase.from('inventory_items').select('*')),
+          safeFetch(supabase.from('health_records').select('*')),
+          safeFetch(supabase.from('transactions').select('*')),
+          safeFetch(supabase.from('sales').select('*')),
+          safeFetch(supabase.from('consumption_logs').select('*')),
+          safeFetch(supabase.from('egg_logs').select('*')),
+          safeFetch(supabase.from('tasks').select('*')),
+          safeFetch(supabase.from('daily_logs').select('*')),
+          safeFetch(supabase.from('customers').select('*')),
+          safeFetch(supabase.from('custom_events').select('*'))
         ]);
 
-        if (err1 || err2 || err3 || err4 || err5 || err6 || err7 || err8) throw new Error("Fetch failed");
+        const [
+          { data: flocksData },
+          { data: inventoryData },
+          { data: healthData },
+          { data: transData },
+          { data: salesData },
+          { data: consData },
+          { data: eggData },
+          { data: taskData },
+          { data: dailyLogData },
+          { data: customerData },
+          { data: customEventData }
+        ] = results;
 
-        // Update State
         if (flocksData) {
-            // Ensure age is accurate based on today's date
-            const flocksWithAge = flocksData.map(f => ({
+            const flocksWithAge = flocksData.map((f: any) => ({
                 ...f,
                 ageInDays: calculateFlockAge(f.startDate, f.initialAge)
             }));
@@ -150,21 +255,14 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         if (consData) setConsumptionRecords(consData);
         if (eggData) setEggLogs(eggData);
         if (taskData) setTasks(taskData);
+        if (dailyLogData) setDailyLogs(dailyLogData);
+        if (customerData) setCustomers(customerData);
+        if (customEventData) setCustomEvents(customEventData);
 
-        // Cache successful fetch
-        cacheData({
-          flocks: flocksData, // Note: We cache the raw data mostly, but calculate on read
-          items: inventoryData,
-          healthRecords: healthData,
-          transactions: transData,
-          salesRecords: salesData,
-          consumptionRecords: consData,
-          eggLogs: eggData,
-          tasks: taskData
-        });
+        // Load local-only HR data from cache for this update as we aren't migrating backend schema live
+        loadFromCache();
 
       } catch (error) {
-        console.error('Network error or fetch failure, loading cache...', error);
         loadFromCache();
       }
     };
@@ -172,192 +270,155 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     fetchData();
   }, []);
 
-  // Update Cache on State Changes (Debounced ideally, but direct for simplicity here)
   useEffect(() => {
     const timer = setTimeout(() => {
         cacheData({
-            items, consumptionRecords, eggLogs, salesRecords, transactions, tasks, flocks, healthRecords
+            items, consumptionRecords, eggLogs, salesRecords, transactions, tasks, flocks, healthRecords, dailyLogs, customers, customEvents, employees, payrollRuns
         });
     }, 1000);
     return () => clearTimeout(timer);
-  }, [items, consumptionRecords, eggLogs, salesRecords, transactions, tasks, flocks, healthRecords]);
+  }, [items, consumptionRecords, eggLogs, salesRecords, transactions, tasks, flocks, healthRecords, dailyLogs, customers, customEvents, employees, payrollRuns]);
 
-
-  // Check for Task Reminders (Due Dates)
-  useEffect(() => {
-    if (!user || tasks.length === 0) return;
-
-    // Read settings
-    const savedSettings = localStorage.getItem('awra_settings');
-    const settings = savedSettings ? JSON.parse(savedSettings) : { notifications: { taskReminders: true } };
-
-    if (!settings.notifications?.taskReminders) return;
-
-    const today = new Date().toISOString().split('T')[0];
-    const currentUserFullName = user.user_metadata?.full_name || '';
-
-    tasks.forEach(t => {
-      // Skip completed tasks
-      if (t.status === 'COMPLETED') return;
-      
-      // Skip if already notified this session
-      if (notifiedTasksRef.current.has(t.id)) return;
-
-      // Check assignment (Simple string match)
-      // If task is unassigned or assigned to someone else, check if generic "Farm Hand" logic applies or strict matching
-      // Here we assume strict matching to the user's name
-      if (currentUserFullName && t.assignee !== currentUserFullName && t.assignee !== 'Unassigned') return;
-
-      if (t.due < today) {
-        addNotification('ERROR', 'Overdue Task', `Task "${t.title}" was due on ${t.due}.`);
-        notifiedTasksRef.current.add(t.id);
-      } else if (t.due === today) {
-        addNotification('WARNING', 'Task Due Today', `Reminder: "${t.title}" is due today.`);
-        notifiedTasksRef.current.add(t.id);
+  // Helper to suppress unhandled rejections during offline mode
+  const safeSupabaseCall = async (call: Promise<any>) => {
+      try {
+          await call;
+      } catch (e) {
+          console.warn('Supabase sync failed (offline?):', e);
       }
-    });
-  }, [tasks, user, addNotification]); 
-
-  // --- Helpers for Optimistic Update + Supabase Call ---
+  };
 
   const addItem = async (item: InventoryItem) => {
     setItems(prev => [item, ...prev]);
-    await supabase.from('inventory_items').insert([item]);
+    safeSupabaseCall(supabase.from('inventory_items').insert([item]));
   };
 
   const updateItem = async (id: string, updates: Partial<InventoryItem>) => {
-    if (updates.quantity !== undefined) {
-      const currentItem = items.find(i => i.id === id);
-      if (currentItem) {
-        const threshold = updates.minThreshold !== undefined ? updates.minThreshold : currentItem.minThreshold;
-        if (updates.quantity <= threshold && currentItem.quantity > threshold) {
-          addNotification('WARNING', 'Low Stock Alert', `${updates.name || currentItem.name} is low.`);
-        }
-      }
-    }
     setItems(prev => prev.map(item => item.id === id ? { ...item, ...updates } : item));
-    await supabase.from('inventory_items').update(updates).eq('id', id);
+    safeSupabaseCall(supabase.from('inventory_items').update(updates).eq('id', id));
   };
 
   const deleteItem = async (id: string) => {
     setItems(prev => prev.filter(item => item.id !== id));
-    await supabase.from('inventory_items').delete().eq('id', id);
+    safeSupabaseCall(supabase.from('inventory_items').delete().eq('id', id));
   };
 
   const adjustStock = async (id: string, amount: number) => {
     const currentItem = items.find(i => i.id === id);
     if (!currentItem) return;
-
     const newQuantity = Math.max(0, currentItem.quantity + amount);
     const newLastRestocked = amount > 0 ? new Date().toISOString().split('T')[0] : currentItem.lastRestocked;
-
-    if (amount < 0 && newQuantity <= currentItem.minThreshold && currentItem.quantity > currentItem.minThreshold) {
-       addNotification('WARNING', 'Low Stock Alert', `${currentItem.name} has dropped below threshold.`);
-    }
-
-    setItems(prev => prev.map(item => {
-      if (item.id === id) {
-        return { ...item, quantity: newQuantity, lastRestocked: newLastRestocked };
-      }
-      return item;
-    }));
-
-    await supabase.from('inventory_items').update({ 
-        quantity: newQuantity, 
-        lastRestocked: newLastRestocked 
-    }).eq('id', id);
+    setItems(prev => prev.map(item => item.id === id ? { ...item, quantity: newQuantity, lastRestocked: newLastRestocked } : item));
+    safeSupabaseCall(supabase.from('inventory_items').update({ quantity: newQuantity, lastRestocked: newLastRestocked }).eq('id', id));
   };
 
   const logConsumption = async (record: FeedConsumption) => {
     setConsumptionRecords(prev => [record, ...prev]);
-    await supabase.from('consumption_logs').insert([record]);
+    safeSupabaseCall(supabase.from('consumption_logs').insert([record]));
+  };
+
+  const updateConsumption = async (id: string, updates: Partial<FeedConsumption>) => {
+    setConsumptionRecords(prev => prev.map(r => r.id === id ? { ...r, ...updates } : r));
+    safeSupabaseCall(supabase.from('consumption_logs').update(updates).eq('id', id));
+  };
+
+  const deleteConsumption = async (id: string) => {
+    setConsumptionRecords(prev => prev.filter(r => r.id !== id));
+    safeSupabaseCall(supabase.from('consumption_logs').delete().eq('id', id));
   };
 
   const logEggCollection = async (log: EggCollectionLog) => {
     setEggLogs(prev => [log, ...prev]);
-    await supabase.from('egg_logs').insert([log]);
+    safeSupabaseCall(supabase.from('egg_logs').insert([log]));
+  };
+
+  const updateEggLog = async (id: string, updates: Partial<EggCollectionLog>) => {
+    setEggLogs(prev => prev.map(log => log.id === id ? { ...log, ...updates } : log));
+    safeSupabaseCall(supabase.from('egg_logs').update(updates).eq('id', id));
+  };
+
+  const deleteEggLog = async (id: string) => {
+    setEggLogs(prev => prev.filter(log => log.id !== id));
+    safeSupabaseCall(supabase.from('egg_logs').delete().eq('id', id));
   };
 
   const addSale = async (sale: SaleRecord) => {
     setSalesRecords(prev => [sale, ...prev]);
-    const netReceivable = sale.totalAmount - (sale.withholdingAmount || 0);
-    const transaction: FinancialTransaction = {
-      id: `AUTO-T-${Date.now()}`,
-      date: sale.date,
-      description: `Sale - ${sale.customer} (${sale.item})`,
-      amount: netReceivable, 
-      vatAmount: sale.vatAmount,
-      withholdingAmount: sale.withholdingAmount,
-      type: 'INCOME',
-      category: 'SALES',
-      referenceId: sale.id,
-      status: sale.status === 'PAID' ? 'COMPLETED' : 'PENDING'
-    };
-    setTransactions(prev => [transaction, ...prev]);
-    await supabase.from('sales').insert([sale]);
-    await supabase.from('transactions').insert([transaction]);
+    if (sale.status === 'PAID' || sale.status === 'INVOICED') {
+      const netReceivable = sale.totalAmount - (sale.withholdingAmount || 0);
+      const transaction: FinancialTransaction = {
+        id: `AUTO-T-${Date.now()}`,
+        date: sale.date,
+        description: `Sale - ${sale.customer} (${sale.item})`,
+        amount: netReceivable, 
+        vatAmount: sale.vatAmount,
+        withholdingAmount: sale.withholdingAmount,
+        type: 'INCOME',
+        category: 'SALES',
+        referenceId: sale.id,
+        status: sale.status === 'PAID' ? 'COMPLETED' : 'PENDING'
+      };
+      setTransactions(prev => [transaction, ...prev]);
+      safeSupabaseCall(supabase.from('transactions').insert([transaction]));
+    }
+    safeSupabaseCall(supabase.from('sales').insert([sale]));
   };
 
-  const updateSaleStatus = async (id: string, status: 'PAID' | 'PENDING' | 'CANCELLED') => {
+  const updateSale = async (id: string, updates: Partial<SaleRecord>) => {
+    setSalesRecords(prev => prev.map(sale => sale.id === id ? { ...sale, ...updates } : sale));
+    safeSupabaseCall(supabase.from('sales').update(updates).eq('id', id));
+  };
+
+  const deleteSale = async (id: string) => {
+    setSalesRecords(prev => prev.filter(sale => sale.id !== id));
+    safeSupabaseCall(supabase.from('sales').delete().eq('id', id));
+  };
+
+  const updateSaleStatus = async (id: string, status: SaleStatus) => {
     setSalesRecords(prev => prev.map(sale => sale.id === id ? { ...sale, status } : sale));
-    setTransactions(prev => prev.map(t => {
-      if (t.referenceId === id) {
-        const newStatus = status === 'CANCELLED' ? 'CANCELLED' : status === 'PAID' ? 'COMPLETED' : 'PENDING';
-        supabase.from('transactions').update({ status: newStatus }).eq('referenceId', id);
-        return { ...t, status: newStatus };
-      }
-      return t;
-    }));
-    await supabase.from('sales').update({ status }).eq('id', id);
+    safeSupabaseCall(supabase.from('sales').update({ status }).eq('id', id));
   };
 
   const addTransaction = async (transaction: FinancialTransaction) => {
     setTransactions(prev => [transaction, ...prev]);
-    await supabase.from('transactions').insert([transaction]);
+    safeSupabaseCall(supabase.from('transactions').insert([transaction]));
   };
 
   const updateTransaction = async (id: string, updates: Partial<FinancialTransaction>) => {
     setTransactions(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
-    await supabase.from('transactions').update(updates).eq('id', id);
+    safeSupabaseCall(supabase.from('transactions').update(updates).eq('id', id));
   };
 
   const deleteTransaction = async (id: string) => {
     setTransactions(prev => prev.filter(t => t.id !== id));
-    await supabase.from('transactions').delete().eq('id', id);
+    safeSupabaseCall(supabase.from('transactions').delete().eq('id', id));
   };
 
   const addTask = async (task: Task) => {
     setTasks(prev => [task, ...prev]);
-    addNotification('INFO', 'New Task Assigned', `Task "${task.title}" has been created.`);
-    await supabase.from('tasks').insert([task]);
+    safeSupabaseCall(supabase.from('tasks').insert([task]));
   };
 
   const updateTask = async (id: string, updates: Partial<Task>) => {
     setTasks(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
-    await supabase.from('tasks').update(updates).eq('id', id);
+    safeSupabaseCall(supabase.from('tasks').update(updates).eq('id', id));
   };
 
   const deleteTask = async (id: string) => {
     setTasks(prev => prev.filter(t => t.id !== id));
-    await supabase.from('tasks').delete().eq('id', id);
+    safeSupabaseCall(supabase.from('tasks').delete().eq('id', id));
   };
 
-  // --- Flock & Health Methods ---
   const addFlock = async (flock: Flock) => {
-    // Ensure age is accurate on creation
-    const flockWithAge = { 
-        ...flock, 
-        ageInDays: calculateFlockAge(flock.startDate, flock.initialAge) 
-    };
+    const flockWithAge = { ...flock, ageInDays: calculateFlockAge(flock.startDate, flock.initialAge) };
     setFlocks(prev => [flockWithAge, ...prev]);
-    await supabase.from('flocks').insert([flockWithAge]);
+    safeSupabaseCall(supabase.from('flocks').insert([flockWithAge]));
   };
 
   const updateFlock = async (id: string, updates: Partial<Flock>) => {
     setFlocks(prev => prev.map(f => {
         if (f.id === id) {
             const updatedFlock = { ...f, ...updates };
-            // Recalculate age if start date or initial age changes
             if (updates.startDate || updates.initialAge !== undefined) {
                 updatedFlock.ageInDays = calculateFlockAge(updatedFlock.startDate, updatedFlock.initialAge);
             }
@@ -365,55 +426,100 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         }
         return f;
     }));
-    await supabase.from('flocks').update(updates).eq('id', id);
+    safeSupabaseCall(supabase.from('flocks').update(updates).eq('id', id));
   };
 
   const deleteFlock = async (id: string) => {
     setFlocks(prev => prev.filter(f => f.id !== id));
-    setHealthRecords(prev => prev.filter(r => r.flockId !== id));
-    setConsumptionRecords(prev => prev.filter(r => r.flockId !== id));
-    setEggLogs(prev => prev.filter(r => r.flockId !== id));
-
-    try {
-        await Promise.all([
-            supabase.from('health_records').delete().eq('flockId', id),
-            supabase.from('consumption_logs').delete().eq('flockId', id),
-            supabase.from('egg_logs').delete().eq('flockId', id)
-        ]);
-        await supabase.from('flocks').delete().eq('id', id);
-        addNotification('SUCCESS', 'Flock Deleted', 'Flock and related records removed.');
-    } catch (error) {
-        console.error('Error deleting flock data:', error);
-        addNotification('ERROR', 'Delete Failed', 'Could not fully remove flock data.');
-    }
+    safeSupabaseCall(supabase.from('flocks').delete().eq('id', id));
   };
 
   const addHealthRecord = async (record: HealthRecord) => {
     setHealthRecords(prev => [record, ...prev]);
-    if (record.type === 'OUTBREAK') {
-        addNotification('ERROR', 'CRITICAL: Disease Outbreak', `Diagnosis: ${record.diagnosis}.`);
-    }
-    await supabase.from('health_records').insert([record]);
+    safeSupabaseCall(supabase.from('health_records').insert([record]));
   };
 
   const updateHealthRecord = async (id: string, updates: Partial<HealthRecord>) => {
     setHealthRecords(prev => prev.map(r => r.id === id ? { ...r, ...updates } : r));
-    await supabase.from('health_records').update(updates).eq('id', id);
+    safeSupabaseCall(supabase.from('health_records').update(updates).eq('id', id));
   };
 
   const deleteHealthRecord = async (id: string) => {
     setHealthRecords(prev => prev.filter(r => r.id !== id));
-    await supabase.from('health_records').delete().eq('id', id);
+    safeSupabaseCall(supabase.from('health_records').delete().eq('id', id));
+  };
+
+  const addDailyLog = async (log: DailyLog) => {
+    setDailyLogs(prev => [log, ...prev]);
+    safeSupabaseCall(supabase.from('daily_logs').insert([log]));
+  };
+
+  const updateDailyLog = async (id: string, updates: Partial<DailyLog>) => {
+    setDailyLogs(prev => prev.map(l => l.id === id ? { ...l, ...updates } : l));
+    safeSupabaseCall(supabase.from('daily_logs').update(updates).eq('id', id));
+  };
+
+  const deleteDailyLog = async (id: string) => {
+    setDailyLogs(prev => prev.filter(l => l.id !== id));
+    safeSupabaseCall(supabase.from('daily_logs').delete().eq('id', id));
+  };
+
+  const addCustomer = async (customer: Customer) => {
+    setCustomers(prev => [customer, ...prev]);
+    safeSupabaseCall(supabase.from('customers').insert([customer]));
+  };
+
+  const updateCustomer = async (id: string, updates: Partial<Customer>) => {
+    setCustomers(prev => prev.map(c => c.id === id ? { ...c, ...updates } : c));
+    safeSupabaseCall(supabase.from('customers').update(updates).eq('id', id));
+  };
+
+  const deleteCustomer = async (id: string) => {
+    setCustomers(prev => prev.filter(c => c.id !== id));
+    safeSupabaseCall(supabase.from('customers').delete().eq('id', id));
+  };
+
+  const addCustomEvent = async (event: FarmEvent) => {
+    setCustomEvents(prev => [event, ...prev]);
+    safeSupabaseCall(supabase.from('custom_events').insert([event]));
+  };
+
+  const deleteCustomEvent = async (id: string) => {
+    setCustomEvents(prev => prev.filter(e => e.id !== id));
+    safeSupabaseCall(supabase.from('custom_events').delete().eq('id', id));
+  };
+
+  const addEmployee = (employee: Employee) => {
+    setEmployees(prev => [...prev, employee]);
+    // Simulate backend sync for offline demo or expand Supabase later
+  };
+
+  const updateEmployee = (id: string, updates: Partial<Employee>) => {
+    setEmployees(prev => prev.map(e => e.id === id ? { ...e, ...updates } : e));
+  };
+
+  const deleteEmployee = (id: string) => {
+    setEmployees(prev => prev.filter(e => e.id !== id));
+  };
+
+  const addPayrollRun = (run: PayrollRun) => {
+    setPayrollRuns(prev => [...prev, run]);
   };
 
   return (
     <InventoryContext.Provider value={{ 
-      items, consumptionRecords, eggLogs, salesRecords, transactions, tasks, flocks, healthRecords,
+      items, consumptionRecords, eggLogs, salesRecords, transactions, tasks, flocks, healthRecords, dailyLogs, customers, customEvents, employees, payrollRuns,
       addItem, updateItem, deleteItem, adjustStock, 
-      logConsumption, logEggCollection, addSale, updateSaleStatus,
+      logConsumption, updateConsumption, deleteConsumption, 
+      logEggCollection, updateEggLog, deleteEggLog,
+      addSale, updateSale, deleteSale, updateSaleStatus,
       addTransaction, updateTransaction, deleteTransaction,
       addTask, updateTask, deleteTask,
-      addFlock, updateFlock, deleteFlock, addHealthRecord, updateHealthRecord, deleteHealthRecord
+      addFlock, updateFlock, deleteFlock, addHealthRecord, updateHealthRecord, deleteHealthRecord,
+      addDailyLog, updateDailyLog, deleteDailyLog,
+      addCustomer, updateCustomer, deleteCustomer,
+      addCustomEvent, deleteCustomEvent,
+      addEmployee, updateEmployee, deleteEmployee, addPayrollRun
     }}>
       {children}
     </InventoryContext.Provider>

@@ -1,9 +1,9 @@
 
-const CACHE_NAME = 'awra-erp-v1';
+const CACHE_NAME = 'awra-erp-v2';
 const URLS_TO_CACHE = [
-  '/',
-  '/index.html',
-  '/manifest.json'
+  './',
+  './index.html',
+  './manifest.json'
 ];
 
 // Install Event: Cache App Shell
@@ -13,6 +13,7 @@ self.addEventListener('install', (event) => {
       return cache.addAll(URLS_TO_CACHE);
     })
   );
+  self.skipWaiting();
 });
 
 // Activate Event: Cleanup Old Caches
@@ -29,15 +30,34 @@ self.addEventListener('activate', (event) => {
       );
     })
   );
+  self.clients.claim();
 });
 
 // Fetch Event: Network First, Fallback to Cache
 self.addEventListener('fetch', (event) => {
+  // Define allowed domains for caching (External CDNs + Local Origin)
+  const allowedDomains = [
+    self.location.origin,
+    'esm.sh',
+    'cdn.tailwindcss.com',
+    'fonts.googleapis.com',
+    'fonts.gstatic.com',
+    'cdn-icons-png.flaticon.com'
+  ];
+
+  const url = new URL(event.request.url);
+  const isAllowed = allowedDomains.some(domain => url.href.includes(domain));
+
+  // Only handle GET requests for allowed domains
+  if (!isAllowed || event.request.method !== 'GET') {
+    return;
+  }
+
   event.respondWith(
     fetch(event.request)
       .then((response) => {
         // Check if we received a valid response
-        if (!response || response.status !== 200 || response.type !== 'basic') {
+        if (!response || response.status !== 200 || (response.type !== 'basic' && response.type !== 'cors')) {
           return response;
         }
 
@@ -45,10 +65,7 @@ self.addEventListener('fetch', (event) => {
         const responseToCache = response.clone();
 
         caches.open(CACHE_NAME).then((cache) => {
-          // Only cache same-origin requests to avoid caching API calls incorrectly here
-          if (event.request.url.startsWith(self.location.origin)) {
              cache.put(event.request, responseToCache);
-          }
         });
 
         return response;

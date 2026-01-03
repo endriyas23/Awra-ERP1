@@ -1,8 +1,8 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { PERFORMANCE_DATA, FEED_SCHEDULE_DATA } from '../constants';
-import { DailyLog } from '../types';
+import { DailyLog, FeedConsumption } from '../types';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 import { useInventory } from '../context/InventoryContext';
 
@@ -27,22 +27,58 @@ const FlockDetail: React.FC = () => {
       logConsumption, 
       eggLogs,
       flocks,
-      healthRecords: allHealthRecords
+      salesRecords, 
+      healthRecords: allHealthRecords,
+      dailyLogs: allDailyLogs,
+      addDailyLog,
+      updateFlock,
+      deleteFlock,
+      addHealthRecord
   } = useInventory();
 
   const flock = flocks.find(f => f.id === id);
   const healthRecords = useMemo(() => allHealthRecords.filter(r => r.flockId === id), [allHealthRecords, id]);
+  const dailyLogs = useMemo(() => allDailyLogs.filter(l => l.flockId === id).sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()), [allDailyLogs, id]); 
   
-  const [dailyLogs, setDailyLogs] = useState<DailyLog[]>([]);
+  // --- Modals State ---
   const [isLogModalOpen, setIsLogModalOpen] = useState(false);
+  const [isFeedModalOpen, setIsFeedModalOpen] = useState(false);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+
+  // --- Forms State ---
   const [newLog, setNewLog] = useState({
     mortality: '',
-    feed: '',
-    feedType: '',
     water: '',
     weight: '',
-    notes: ''
+    notes: '',
+    feedItemId: '',
+    feedQuantity: ''
   });
+
+  const [feedForm, setFeedForm] = useState({
+    feedItemId: '',
+    quantity: ''
+  });
+
+  const [editForm, setEditForm] = useState({
+    name: '',
+    house: '',
+    status: 'ACTIVE' as 'ACTIVE' | 'DEPLETED' | 'QUARANTINE'
+  });
+
+  // Load flock data into edit form when modal opens or flock changes
+  useEffect(() => {
+    if (flock) {
+      setEditForm({
+        name: flock.name,
+        house: flock.house,
+        status: flock.status
+      });
+    }
+  }, [flock]);
+
+  const feedItems = inventoryItems.filter(item => item.category === 'FEED');
 
   const currentAge = useMemo(() => {
     if (!flock) return 0;
@@ -104,23 +140,18 @@ const FlockDetail: React.FC = () => {
       return Math.round(totalKg);
   }, [feedRecommendation, flock]);
 
-  // Filter inventory for this specific flock type using LIVE context data
+  // Filter inventory for this specific flock type using LIVE context data (Used for display only)
   const availableFeedItems = useMemo(() => {
     if (!flock) return [];
     return inventoryItems.filter(item => {
         if (item.category !== 'FEED') return false;
         if (flock.type === 'BROILER') {
-          return ['Starter Feed', 'Grower Feed', 'Finisher Feed'].includes(item.name);
+          return ['Starter Feed', 'Grower Feed', 'Finisher Feed'].some(t => item.name.includes(t));
         }
         if (flock.type === 'LAYER') {
            return [
-            'Chick Starter Feed', 
-            'Pullet Grower Feed', 
-            'Pre-Layer Feed', 
-            'Layer Phase 1 Feed', 
-            'Layer Phase 2 Feed',
-            'Rearing Feed' // Added Rearing Feed match
-          ].includes(item.name);
+            'Chick', 'Grower', 'Pre-Layer', 'Layer', 'Rearing'
+          ].some(t => item.name.includes(t));
         }
         return true;
     });
@@ -133,6 +164,14 @@ const FlockDetail: React.FC = () => {
           item.name.toLowerCase().includes(feedRecommendation.feedSearchTerm.toLowerCase())
       );
   }, [feedRecommendation, availableFeedItems]);
+
+  // --- Sales & Revenue Logic ---
+  const flockRevenue = useMemo(() => {
+      if(!flock) return 0;
+      return salesRecords
+        .filter(s => s.flockId === flock.id && s.status !== 'CANCELLED')
+        .reduce((acc, s) => acc + s.totalAmount, 0);
+  }, [salesRecords, flock]);
 
   // --- Production Data Logic for Layers ---
   const productionData = useMemo(() => {
@@ -167,70 +206,168 @@ const FlockDetail: React.FC = () => {
     );
   }
 
+  // --- CRUD Handlers ---
+
+  const handleUpdateFlock = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!flock) return;
+    
+    updateFlock(flock.id, {
+      name: editForm.name,
+      house: editForm.house,
+      status: editForm.status
+    });
+    
+    setIsEditModalOpen(false);
+  };
+
+  const handleDeleteFlock = () => {
+    if (!flock) return;
+    deleteFlock(flock.id);
+    setIsDeleteModalOpen(false);
+    navigate('/flock'); // Redirect to list after delete
+  };
+
   const handleAddLog = (e: React.FormEvent) => {
     e.preventDefault();
-    
-    // Inventory Deduction & Consumption Logging
-    const feedQtyKg = parseFloat(newLog.feed) || 0;
-    if (newLog.feedType && feedQtyKg > 0) {
-        const item = availableFeedItems.find(i => i.id === newLog.feedType);
-        if (item) {
-            // 1. Deduct from Stock
-            // Convert kg to bags if necessary (Assumption: 1 bag = 50kg)
-            const deductionAmount = item.unit.toLowerCase().includes('bag') ? feedQtyKg / 50 : feedQtyKg;
-            adjustStock(item.id, -deductionAmount);
+    if (!flock) return;
 
-            // 2. Log Consumption for Feed Module
-            const pricePerBag = item.pricePerUnit || 0;
-            const estimatedCost = (feedQtyKg / 50) * pricePerBag; // Assuming 50kg bags for cost calc
+    let feedCost = 0;
+    const feedQtyKg = parseFloat(newLog.feedQuantity) || 0;
+    const logDate = new Date().toISOString().split('T')[0];
+
+    // Handle Feed Inventory Logic
+    if (feedQtyKg > 0 && newLog.feedItemId) {
+        const item = feedItems.find(i => i.id === newLog.feedItemId);
+        if (item) {
+            const isBag = item.unit.toLowerCase().includes('bag');
+            // Conversion: If inventory is in bags, assume 1 Bag = 50kg.
+            const deductionAmount = isBag ? feedQtyKg / 50 : feedQtyKg;
+
+            if (deductionAmount > item.quantity) {
+                alert(`Insufficient stock for ${item.name}. Available: ${item.quantity} ${item.unit} (approx ${(item.quantity * (isBag ? 50 : 1)).toFixed(1)} kg)`);
+                return;
+            }
             
-            logConsumption({
-                id: `C-${Date.now()}`,
+            // Adjust Inventory
+            adjustStock(item.id, -deductionAmount);
+            
+            // Log Consumption
+            feedCost = (item.pricePerUnit || 0) * deductionAmount;
+            const consumptionRecord: FeedConsumption = {
+                id: `FC-${Date.now()}`,
                 flockId: flock.id,
                 feedItemId: item.id,
                 quantity: feedQtyKg,
-                date: new Date().toISOString().split('T')[0],
-                cost: estimatedCost
-            });
+                date: logDate,
+                cost: feedCost
+            };
+            logConsumption(consumptionRecord);
         }
     }
 
+    // Create log
     const log: DailyLog = {
       id: `L-${Date.now()}`,
       flockId: flock.id,
-      date: new Date().toISOString().split('T')[0],
-      mortality: 0, // Mortality logging disabled in this view, moved to Health Module
+      date: logDate,
+      mortality: parseFloat(newLog.mortality) || 0,
       feedConsumed: feedQtyKg,
       waterConsumed: parseFloat(newLog.water) || 0,
       averageWeight: parseFloat(newLog.weight) || undefined,
-      notes: newLog.notes ? `${newLog.notes} (Feed: ${availableFeedItems.find(i=>i.id===newLog.feedType)?.name || 'N/A'})` : undefined
+      notes: newLog.notes
     };
-    setDailyLogs([log, ...dailyLogs]);
+    
+    addDailyLog(log);
+
+    // Apply Side Effects for Mortality
+    if (log.mortality > 0) {
+        updateFlock(flock.id, { currentCount: flock.currentCount - log.mortality });
+        addHealthRecord({
+            id: `H-MORT-DL-${Date.now()}`,
+            flockId: flock.id,
+            date: log.date,
+            type: 'MORTALITY',
+            diagnosis: 'Unspecified',
+            mortality: log.mortality,
+            status: 'COMPLETED',
+            veterinarian: 'Farm Staff',
+            details: `Daily Log Note: ${log.notes || 'None'}`
+        });
+    }
     
     setIsLogModalOpen(false);
-    setNewLog({ mortality: '', feed: '', feedType: '', water: '', weight: '', notes: '' });
+    setNewLog({ mortality: '', water: '', weight: '', notes: '', feedItemId: '', feedQuantity: '' });
   };
 
-  const selectedFeedItem = availableFeedItems.find(i => i.id === newLog.feedType);
+  const handleLogFeed = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!feedForm.feedItemId || !feedForm.quantity) return;
+
+    const feedQtyKg = parseFloat(feedForm.quantity);
+    const item = feedItems.find(i => i.id === feedForm.feedItemId);
+
+    if (!item) return;
+
+    const isBag = item.unit.toLowerCase().includes('bag');
+    const deductionAmount = isBag ? feedQtyKg / 50 : feedQtyKg;
+
+    if (deductionAmount > item.quantity) {
+      alert(`Insufficient stock! You requested ${feedQtyKg}kg (approx ${deductionAmount.toFixed(2)} ${item.unit}), but only ${item.quantity} ${item.unit} are available.`);
+      return;
+    }
+
+    adjustStock(item.id, -deductionAmount);
+
+    const record: FeedConsumption = {
+      id: `FC-${Date.now()}`,
+      flockId: flock.id,
+      feedItemId: item.id,
+      quantity: feedQtyKg,
+      date: new Date().toISOString().split('T')[0],
+      cost: (item.pricePerUnit || 0) * deductionAmount
+    };
+    logConsumption(record);
+
+    setIsFeedModalOpen(false);
+    setFeedForm({ feedItemId: '', quantity: '' });
+    alert("Feed consumption logged successfully.");
+  };
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500 pb-20">
-      <div className="flex items-center gap-4">
-        <button 
-          onClick={() => navigate('/flock')}
-          className="w-10 h-10 flex items-center justify-center bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors"
-        >
-          ←
-        </button>
-        <div>
-          <h2 className="text-3xl font-bold text-slate-800">{flock.name}</h2>
-          <div className="flex gap-4 text-sm text-slate-500 mt-1">
-            <span>{flock.breed}</span>
-            <span>•</span>
-            <span>{flock.house}</span>
-            <span>•</span>
-            <span className="font-semibold text-teal-600">ID: {flock.id}</span>
+      <div className="flex justify-between items-start">
+        <div className="flex items-center gap-4">
+          <button 
+            onClick={() => navigate('/flock')}
+            className="w-10 h-10 flex items-center justify-center bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors"
+          >
+            ←
+          </button>
+          <div>
+            <h2 className="text-3xl font-bold text-slate-800">{flock.name}</h2>
+            <div className="flex gap-4 text-sm text-slate-500 mt-1">
+              <span>{flock.breed}</span>
+              <span>•</span>
+              <span>{flock.house}</span>
+              <span>•</span>
+              <span className="font-semibold text-teal-600">ID: {flock.id}</span>
+            </div>
           </div>
+        </div>
+        <div className="flex gap-2">
+            <button 
+              onClick={() => setIsEditModalOpen(true)}
+              className="px-4 py-2 bg-white border border-slate-200 text-slate-600 font-bold rounded-xl hover:bg-slate-50 transition-colors flex items-center gap-2"
+            >
+              <span>✎</span> Edit
+            </button>
+            <button 
+              onClick={() => setIsDeleteModalOpen(true)}
+              className="px-4 py-2 bg-red-50 text-red-600 font-bold rounded-xl hover:bg-red-100 transition-colors flex items-center gap-2"
+            >
+              <span>🗑</span> Delete
+            </button>
         </div>
       </div>
 
@@ -288,7 +425,7 @@ const FlockDetail: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
         <div className="lg:col-span-3 space-y-8">
           {/* Main Stats */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6">
             <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
               <p className="text-slate-500 text-xs font-bold uppercase tracking-wider">Current Population</p>
               <h3 className="text-2xl font-bold mt-1">{flock.currentCount.toLocaleString()}</h3>
@@ -297,14 +434,22 @@ const FlockDetail: React.FC = () => {
             <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
               <p className="text-slate-500 text-xs font-bold uppercase tracking-wider">Flock Age</p>
               <h3 className="text-2xl font-bold mt-1">{currentAge} Days</h3>
-              <p className="text-xs text-slate-400 mt-1">Placement: {new Date(flock.startDate).toLocaleDateString()} (at {flock.initialAge}d)</p>
+              <p className="text-xs text-slate-400 mt-1">Placement: {new Date(flock.startDate).toLocaleDateString()}</p>
             </div>
             <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
               <p className="text-slate-500 text-xs font-bold uppercase tracking-wider">Survival Rate</p>
               <h3 className="text-2xl font-bold mt-1 text-emerald-600">
                 {((flock.currentCount / flock.initialCount) * 100).toFixed(1)}%
               </h3>
-              <p className="text-xs text-slate-400 mt-1">Cumulative mortality: {flock.initialCount - flock.currentCount}</p>
+              <p className="text-xs text-slate-400 mt-1">Mortality: {flock.initialCount - flock.currentCount}</p>
+            </div>
+            {/* New Revenue Card */}
+            <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+              <p className="text-slate-500 text-xs font-bold uppercase tracking-wider">Total Revenue</p>
+              <h3 className="text-2xl font-bold mt-1 text-teal-600">
+                ${flockRevenue.toLocaleString()}
+              </h3>
+              <p className="text-xs text-slate-400 mt-1">Linked Sales</p>
             </div>
           </div>
 
@@ -313,7 +458,7 @@ const FlockDetail: React.FC = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
                 <h4 className="font-bold text-slate-800 mb-4">Growth Curve (kg)</h4>
-                <div className="h-64">
+                <div className="h-64 w-full">
                     <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={PERFORMANCE_DATA}>
                         <defs>
@@ -333,7 +478,7 @@ const FlockDetail: React.FC = () => {
                 </div>
                 <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
                 <h4 className="font-bold text-slate-800 mb-4">Daily FCR</h4>
-                <div className="h-64">
+                <div className="h-64 w-full">
                     <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={PERFORMANCE_DATA}>
                         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
@@ -363,7 +508,7 @@ const FlockDetail: React.FC = () => {
                     </div>
                  )}
                </div>
-               <div className="h-64">
+               <div className="h-64 w-full">
                  {productionData.length > 0 ? (
                     <ResponsiveContainer width="100%" height="100%">
                         <AreaChart data={productionData}>
@@ -418,7 +563,7 @@ const FlockDetail: React.FC = () => {
                       <td className="px-6 py-4">{log.date}</td>
                       <td className="px-6 py-4 font-bold text-teal-600">Day {calculateAgeInDays(flock.startDate, flock.initialAge || 0, log.date)}</td>
                       <td className={`px-6 py-4 font-bold ${log.mortality > 0 ? 'text-red-500' : 'text-slate-400'}`}>{log.mortality}</td>
-                      <td className="px-6 py-4">{log.feedConsumed}</td>
+                      <td className="px-6 py-4 font-bold text-amber-600">{log.feedConsumed > 0 ? log.feedConsumed : '-'}</td>
                       <td className="px-6 py-4">{log.waterConsumed}</td>
                       <td className="px-6 py-4 font-medium">{log.averageWeight || '-'}</td>
                     </tr>
@@ -486,10 +631,16 @@ const FlockDetail: React.FC = () => {
               >
                 Add Daily Log
               </button>
+              <button 
+                onClick={() => setIsFeedModalOpen(true)}
+                className="w-full py-3 bg-amber-500 hover:bg-amber-600 rounded-xl font-bold transition-all flex items-center justify-center gap-2"
+              >
+                <span>🍽️</span> Log Feed Consumption
+              </button>
               {flock.type === 'LAYER' && (
                  <button 
                     onClick={() => navigate('/production')}
-                    className="w-full py-3 bg-amber-500 hover:bg-amber-600 rounded-xl font-bold transition-all flex items-center justify-center gap-2"
+                    className="w-full py-3 bg-blue-500 hover:bg-blue-600 rounded-xl font-bold transition-all flex items-center justify-center gap-2"
                  >
                     <span>🥚</span> Log Egg Collection
                  </button>
@@ -566,11 +717,165 @@ const FlockDetail: React.FC = () => {
         </div>
       </div>
 
-      {/* Daily Log Modal */}
-      {isLogModalOpen && (
+      {/* Edit Modal */}
+      {isEditModalOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
           <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
             <div className="p-6 border-b border-slate-100 flex justify-between items-center">
+              <h3 className="text-xl font-bold text-slate-800">Edit Flock Details</h3>
+              <button onClick={() => setIsEditModalOpen(false)} className="text-slate-400 hover:text-slate-600">✕</button>
+            </div>
+            <form onSubmit={handleUpdateFlock} className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Batch Name</label>
+                <input 
+                  required
+                  type="text" 
+                  className="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-teal-500 outline-none"
+                  value={editForm.name}
+                  onChange={e => setEditForm({...editForm, name: e.target.value})}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">House Location</label>
+                <input 
+                  required
+                  type="text" 
+                  className="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-teal-500 outline-none"
+                  value={editForm.house}
+                  onChange={e => setEditForm({...editForm, house: e.target.value})}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Status</label>
+                <select 
+                  className="w-full p-3 rounded-xl border border-slate-200 bg-white focus:ring-2 focus:ring-teal-500 outline-none"
+                  value={editForm.status}
+                  onChange={e => setEditForm({...editForm, status: e.target.value as any})}
+                >
+                  <option value="ACTIVE">Active</option>
+                  <option value="QUARANTINE">Quarantine</option>
+                  <option value="DEPLETED">Depleted / Sold</option>
+                </select>
+              </div>
+              <button 
+                type="submit" 
+                className="w-full py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold shadow-lg transition-all"
+              >
+                Save Changes
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {isDeleteModalOpen && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl w-full max-w-sm shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200 p-6 text-center">
+            <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4 text-3xl">
+              🗑
+            </div>
+            <h3 className="text-xl font-bold text-slate-800 mb-2">Delete This Flock?</h3>
+            <p className="text-slate-500 mb-6">
+              This will permanently remove the flock and all associated logs. This action cannot be undone.
+            </p>
+            <div className="flex gap-3">
+              <button 
+                onClick={() => setIsDeleteModalOpen(false)}
+                className="flex-1 py-3 rounded-xl font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 transition-colors"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={handleDeleteFlock}
+                className="flex-1 py-3 rounded-xl font-bold text-white bg-red-600 hover:bg-red-700 shadow-lg transition-colors"
+              >
+                Yes, Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Feed Consumption Modal */}
+      {isFeedModalOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-amber-50/50">
+              <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                🍽️ Log Feed Consumption
+              </h3>
+              <button onClick={() => setIsFeedModalOpen(false)} className="text-slate-400 hover:text-slate-600">✕</button>
+            </div>
+            
+            <form onSubmit={handleLogFeed} className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Select Feed Item</label>
+                <select 
+                  required
+                  className="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-amber-500 outline-none"
+                  value={feedForm.feedItemId}
+                  onChange={e => setFeedForm({...feedForm, feedItemId: e.target.value})}
+                >
+                  <option value="">-- Select from Inventory --</option>
+                  {feedItems.map(item => (
+                    <option key={item.id} value={item.id}>
+                      {item.name} ({item.quantity} {item.unit} available)
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Quantity Consumed (kg)</label>
+                <input 
+                  required
+                  type="number" 
+                  min="0.1"
+                  step="0.1"
+                  className="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-amber-500 outline-none"
+                  placeholder="0.00"
+                  value={feedForm.quantity}
+                  onChange={e => setFeedForm({...feedForm, quantity: e.target.value})}
+                />
+              </div>
+
+              {feedForm.feedItemId && (
+                  <div className="bg-amber-50 p-3 rounded-xl text-xs flex flex-col gap-1">
+                      <div className="flex justify-between items-center text-slate-600">
+                          <span>Inventory Stock:</span>
+                          <span className="font-bold">
+                              {feedItems.find(i => i.id === feedForm.feedItemId)?.quantity} {feedItems.find(i => i.id === feedForm.feedItemId)?.unit}
+                          </span>
+                      </div>
+                      {feedItems.find(i => i.id === feedForm.feedItemId)?.unit.toLowerCase().includes('bag') && (
+                          <div className="flex justify-between items-center text-amber-700">
+                              <span>Conversion:</span>
+                              <span className="font-bold">1 Bag = 50 kg</span>
+                          </div>
+                      )}
+                  </div>
+              )}
+
+              <div className="pt-2">
+                <button 
+                  type="submit" 
+                  className="w-full py-3 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-bold shadow-lg shadow-amber-500/20 transition-all"
+                >
+                  Confirm & Adjust Stock
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Daily Log Modal */}
+      {isLogModalOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto">
+            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
               <h3 className="text-xl font-bold text-slate-800">New Daily Log</h3>
               <button onClick={() => setIsLogModalOpen(false)} className="text-slate-400 hover:text-slate-600">✕</button>
             </div>
@@ -587,68 +892,75 @@ const FlockDetail: React.FC = () => {
                     onChange={e => setNewLog({...newLog, weight: e.target.value})}
                   />
                 </div>
-                {/* Mortality input removed */}
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Feed Type</label>
-                <select 
-                  className="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-teal-500 outline-none"
-                  value={newLog.feedType}
-                  onChange={e => setNewLog({...newLog, feedType: e.target.value})}
-                >
-                  <option value="">Select Ration...</option>
-                  {availableFeedItems.map(item => (
-                    <option key={item.id} value={item.id}>
-                      {item.name} ({item.quantity} {item.unit} avail)
-                    </option>
-                  ))}
-                </select>
-                {selectedFeedItem && (
-                    <p className="text-[10px] text-slate-500 mt-1 text-right">
-                        Available Stock: <b>{selectedFeedItem.quantity} {selectedFeedItem.unit}</b>
-                    </p>
-                )}
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <div className="flex flex-col mb-1 gap-1">
-                      <label className="block text-xs font-bold text-slate-500 uppercase">Feed Quantity (kg)</label>
-                      {recommendedFeedTotal && recommendedFeedTotal > 0 && suggestedInventoryItem && (
-                          <button
-                            type="button"
-                            onClick={() => setNewLog({
-                                ...newLog, 
-                                feed: recommendedFeedTotal.toString(),
-                                feedType: suggestedInventoryItem.id
-                            })}
-                            className="text-[10px] bg-teal-50 text-teal-600 px-2 py-1 rounded text-left hover:bg-teal-100 font-bold border border-teal-100 transition-colors"
-                            title="Apply Recommended Amount and Type"
-                          >
-                             ✨ Auto-Apply: {suggestedInventoryItem.name.split('Feed')[0]} ({recommendedFeedTotal}kg)
-                          </button>
-                      )}
-                  </div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Mortality</label>
                   <input 
                     type="number" 
-                    className="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-teal-500 outline-none"
-                    placeholder="450"
-                    value={newLog.feed}
-                    onChange={e => setNewLog({...newLog, feed: e.target.value})}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Water (L)</label>
-                  <input 
-                    type="number" 
-                    className="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-teal-500 outline-none"
-                    placeholder="1200"
-                    value={newLog.water}
-                    onChange={e => setNewLog({...newLog, water: e.target.value})}
+                    min="0"
+                    className="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-red-500 outline-none"
+                    placeholder="0"
+                    value={newLog.mortality}
+                    onChange={e => setNewLog({...newLog, mortality: e.target.value})}
                   />
                 </div>
               </div>
+
+              {/* Integrated Feed & Water */}
+              <div className="p-4 bg-amber-50 rounded-xl border border-amber-100 space-y-3">
+                   <h4 className="text-xs font-bold text-amber-800 uppercase tracking-wider mb-2">Consumption</h4>
+                   
+                   <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Feed Type</label>
+                        <select 
+                            className="w-full p-3 rounded-xl border border-amber-200 focus:ring-2 focus:ring-amber-500 outline-none text-sm bg-white"
+                            value={newLog.feedItemId}
+                            onChange={e => setNewLog({...newLog, feedItemId: e.target.value})}
+                        >
+                            <option value="">-- Select Feed --</option>
+                            {feedItems.map(item => (
+                                <option key={item.id} value={item.id}>{item.name} ({item.quantity} {item.unit})</option>
+                            ))}
+                        </select>
+                   </div>
+                   
+                   <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Feed Used (kg)</label>
+                            <input 
+                                type="number" 
+                                step="0.1"
+                                min="0"
+                                className="w-full p-3 rounded-xl border border-amber-200 focus:ring-2 focus:ring-amber-500 outline-none"
+                                placeholder="0.0"
+                                value={newLog.feedQuantity}
+                                onChange={e => setNewLog({...newLog, feedQuantity: e.target.value})}
+                                disabled={!newLog.feedItemId}
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Water (L)</label>
+                            <input 
+                                type="number" 
+                                className="w-full p-3 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none"
+                                placeholder="1200"
+                                value={newLog.water}
+                                onChange={e => setNewLog({...newLog, water: e.target.value})}
+                            />
+                        </div>
+                   </div>
+                   {newLog.feedItemId && (
+                       <div className="text-xs text-right text-amber-700">
+                           {(() => {
+                               const item = feedItems.find(i => i.id === newLog.feedItemId);
+                               if (item?.unit.toLowerCase().includes('bag')) {
+                                   return `1 Bag = 50kg. Available: ${item.quantity} Bags (${item.quantity * 50} kg)`;
+                               }
+                               return `Available: ${item?.quantity} ${item?.unit}`;
+                           })()}
+                       </div>
+                   )}
+               </div>
+
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Observations</label>
                 <textarea 
@@ -658,9 +970,12 @@ const FlockDetail: React.FC = () => {
                   onChange={e => setNewLog({...newLog, notes: e.target.value})}
                 />
               </div>
-              <div className="pt-4">
-                <button type="submit" className="w-full bg-teal-600 text-white py-3 rounded-xl font-bold shadow-lg shadow-teal-600/20 hover:bg-teal-700 transition-all">
-                  Submit Today's Log
+              <div className="pt-2">
+                <button 
+                    type="submit" 
+                    className="w-full bg-teal-600 text-white py-3 rounded-xl font-bold shadow-lg shadow-teal-600/20 hover:bg-teal-700 transition-all"
+                >
+                  Save Daily Log
                 </button>
               </div>
             </form>

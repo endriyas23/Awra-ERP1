@@ -10,16 +10,19 @@ const InventoryManagement: React.FC = () => {
   const { items, addItem, updateItem, deleteItem, adjustStock, addTransaction } = useInventory();
   
   const [searchTerm, setSearchTerm] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState<'ALL' | 'FEED' | 'MEDICINE' | 'EQUIPMENT' | 'BIRDS'>('ALL');
+  const [categoryFilter, setCategoryFilter] = useState<'ALL' | 'FEED' | 'MEDICINE' | 'EQUIPMENT' | 'BIRDS' | 'PRODUCE' | 'MEAT' | 'BYPRODUCT'>('ALL');
 
   // Modal States
   const [isItemModalOpen, setIsItemModalOpen] = useState(false);
   const [isStockModalOpen, setIsStockModalOpen] = useState(false);
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  
   const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
+  const [itemToDelete, setItemToDelete] = useState<string | null>(null);
 
   // Form States
-  const [itemForm, setItemForm] = useState<Partial<InventoryItem>>({
-    name: '', category: 'FEED', quantity: 0, unit: 'units', minThreshold: 10, pricePerUnit: 0
+  const [itemForm, setItemForm] = useState<any>({
+    name: '', category: 'FEED', quantity: 0, unit: 'units', minThreshold: 10, pricePerUnit: 0, vatRate: '15', whtRate: '2'
   });
   
   const [stockForm, setStockForm] = useState({
@@ -50,12 +53,25 @@ const InventoryManagement: React.FC = () => {
 
   const handleOpenItemModal = (item?: InventoryItem) => {
     if (isReadOnly) return;
+    
+    // Load defaults from settings if available
+    let defaultVat = '15';
+    let defaultWht = '2';
+    const saved = localStorage.getItem('awra_settings');
+    if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.financials) {
+            defaultVat = parsed.financials.defaultVatRate?.toString() || '15';
+            defaultWht = parsed.financials.defaultWhtRate?.toString() || '2';
+        }
+    }
+
     if (item) {
       setSelectedItem(item);
-      setItemForm({ ...item });
+      setItemForm({ ...item, vatRate: '0', whtRate: '0' }); // Reset tax rates for edit mode as they apply to transaction
     } else {
       setSelectedItem(null);
-      setItemForm({ name: '', category: 'FEED', quantity: 0, unit: 'units', minThreshold: 10, pricePerUnit: 0 });
+      setItemForm({ name: '', category: 'FEED', quantity: 0, unit: 'units', minThreshold: 10, pricePerUnit: 0, vatRate: defaultVat, whtRate: defaultWht });
     }
     setIsItemModalOpen(true);
   };
@@ -70,17 +86,57 @@ const InventoryManagement: React.FC = () => {
   const handleSaveItem = (e: React.FormEvent) => {
     e.preventDefault();
     if (isReadOnly) return;
+
+    // Destructure to separate item data from transaction data
+    const { vatRate, whtRate, ...formDataRaw } = itemForm;
+
     if (selectedItem) {
-      // Update
-      updateItem(selectedItem.id, itemForm);
+      // Update: Strip ID to prevent PK conflicts
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { id, ...cleanUpdates } = formDataRaw;
+      updateItem(selectedItem.id, cleanUpdates);
     } else {
+      // Duplicate Check
+      const exists = items.some(i => i.name.toLowerCase() === formDataRaw.name.toLowerCase());
+      if (exists) {
+          alert('An item with this name already exists.');
+          return;
+      }
+
       // Create
+      const newItemId = `I${Date.now()}`;
       const newItem: InventoryItem = {
-        id: `I${Date.now()}`, // Simple ID generation
+        id: newItemId,
         lastRestocked: new Date().toISOString().split('T')[0],
-        ...itemForm as InventoryItem
+        ...formDataRaw as InventoryItem
       };
       addItem(newItem);
+
+      // Create transaction for initial stock cost
+      const qty = Number(formDataRaw.quantity) || 0;
+      const price = Number(formDataRaw.pricePerUnit) || 0;
+      const vRate = parseFloat(vatRate) || 0;
+      const wRate = parseFloat(whtRate) || 0;
+      
+      if (qty > 0 && price > 0 && !['PRODUCE', 'MEAT', 'BYPRODUCT'].includes(formDataRaw.category)) {
+          const baseCost = qty * price;
+          const vatAmount = baseCost * (vRate / 100);
+          const whtAmount = baseCost * (wRate / 100);
+          const totalCost = baseCost + vatAmount - whtAmount;
+
+          addTransaction({
+              id: `EXP-INIT-${newItemId}`,
+              date: new Date().toISOString().split('T')[0],
+              description: `Initial Inventory Purchase: ${formDataRaw.name} (${qty} ${formDataRaw.unit})`,
+              amount: totalCost,
+              vatAmount: vatAmount > 0 ? vatAmount : undefined,
+              withholdingAmount: whtAmount > 0 ? whtAmount : undefined,
+              type: 'EXPENSE',
+              category: formDataRaw.category === 'FEED' ? 'FEED' : formDataRaw.category === 'MEDICINE' ? 'MEDICINE' : 'MAINTENANCE',
+              status: 'COMPLETED',
+              referenceId: newItemId
+          });
+      }
     }
     setIsItemModalOpen(false);
   };
@@ -96,13 +152,11 @@ const InventoryManagement: React.FC = () => {
     if (stockForm.action === 'RESTOCK') adjustment = qty;
     else if (stockForm.action === 'CONSUME') adjustment = -qty;
     else if (stockForm.action === 'ADJUST') {
-        // For absolute adjust, we calculate the difference
         adjustment = qty - selectedItem.quantity;
     }
 
     adjustStock(selectedItem.id, adjustment);
 
-    // Link to Financial Module if Restocking
     if (stockForm.action === 'RESTOCK' && stockForm.cost) {
        const cost = parseFloat(stockForm.cost);
        if (cost > 0) {
@@ -122,16 +176,22 @@ const InventoryManagement: React.FC = () => {
     setIsStockModalOpen(false);
   };
 
-  const handleDelete = (id: string) => {
+  const promptDelete = (id: string) => {
     if (isReadOnly) return;
-    if (window.confirm("Are you sure you want to delete this item?")) {
-      deleteItem(id);
+    setItemToDelete(id);
+    setDeleteModalOpen(true);
+  };
+
+  const confirmDelete = () => {
+    if (itemToDelete) {
+      deleteItem(itemToDelete);
+      setDeleteModalOpen(false);
+      setItemToDelete(null);
     }
   };
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500 pb-20">
-      {/* Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4">
         <div>
           <h2 className="text-3xl font-bold text-slate-900">Inventory Management</h2>
@@ -147,7 +207,6 @@ const InventoryManagement: React.FC = () => {
         )}
       </div>
 
-      {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <StatCard 
             label="Total Inventory Value" 
@@ -169,85 +228,20 @@ const InventoryManagement: React.FC = () => {
         />
       </div>
 
-      {/* Critical Stock Alerts - Suggestion System */}
-      {lowStockItems.length > 0 && (
-        <div className="bg-red-50 border border-red-100 rounded-3xl p-6 animate-in slide-in-from-top-4 shadow-sm">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-10 h-10 bg-red-100 text-red-600 rounded-xl flex items-center justify-center text-xl shadow-sm">⚠️</div>
-            <div>
-              <h3 className="text-lg font-bold text-red-800">Restock Suggestions</h3>
-              <p className="text-xs text-red-600 font-medium">The following items are critically low. Recommended actions:</p>
-            </div>
-          </div>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {lowStockItems.map(item => {
-              const deficit = item.minThreshold - item.quantity;
-              const suggestedRestock = Math.max(deficit * 2, item.minThreshold * 2); // Simple heuristic: restock to double the min
-              
-              return (
-                <div key={item.id} className="bg-white p-4 rounded-xl border border-red-100 shadow-sm flex flex-col justify-between hover:shadow-md transition-shadow">
-                  <div className="mb-3">
-                    <div className="flex justify-between items-start mb-2">
-                      <span className="font-bold text-slate-800 text-sm line-clamp-1" title={item.name}>{item.name}</span>
-                      <span className="bg-red-100 text-red-700 text-[9px] font-bold px-1.5 py-0.5 rounded uppercase">Critical</span>
-                    </div>
-                    <div className="flex justify-between text-xs text-slate-500 mb-2 bg-slate-50 p-2 rounded-lg">
-                      <div className="text-center">
-                        <span className="block text-[9px] uppercase font-bold text-slate-400">Current</span>
-                        <span className="font-bold text-red-600 text-sm">{item.quantity}</span>
-                      </div>
-                      <div className="text-center border-l border-slate-200 pl-2">
-                        <span className="block text-[9px] uppercase font-bold text-slate-400">Threshold</span>
-                        <span className="font-bold text-slate-700 text-sm">{item.minThreshold}</span>
-                      </div>
-                      <div className="text-center border-l border-slate-200 pl-2">
-                        <span className="block text-[9px] uppercase font-bold text-slate-400">Suggested</span>
-                        <span className="font-bold text-emerald-600 text-sm">+{suggestedRestock}</span>
-                      </div>
-                    </div>
-                  </div>
-                  <button 
-                    onClick={() => {
-                        setSelectedItem(item);
-                        setStockForm({ 
-                            action: 'RESTOCK', 
-                            quantity: suggestedRestock, 
-                            cost: item.pricePerUnit ? (suggestedRestock * item.pricePerUnit).toFixed(2) : '', 
-                            notes: 'Auto-suggestion due to low stock' 
-                        });
-                        setIsStockModalOpen(true);
-                    }}
-                    className="w-full py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold transition-all shadow-red-200 shadow-lg"
-                  >
-                    Order Restock
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Main Content Area */}
       <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden flex flex-col min-h-[500px]">
-        {/* Toolbar */}
         <div className="p-5 border-b border-slate-100 flex flex-col lg:flex-row justify-between items-center gap-4">
-          
-          {/* Tabs */}
-          <div className="flex bg-slate-100 p-1 rounded-xl">
-             {['ALL', 'FEED', 'MEDICINE', 'EQUIPMENT', 'BIRDS'].map(cat => (
+          <div className="flex bg-slate-100 p-1 rounded-xl overflow-x-auto max-w-full">
+             {['ALL', 'FEED', 'MEDICINE', 'EQUIPMENT', 'BIRDS', 'PRODUCE', 'MEAT', 'BYPRODUCT'].map(cat => (
                <button
                  key={cat}
                  onClick={() => setCategoryFilter(cat as any)}
-                 className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${categoryFilter === cat ? 'bg-white text-teal-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                 className={`px-4 py-2 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${categoryFilter === cat ? 'bg-white text-teal-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                >
                  {cat}
                </button>
              ))}
           </div>
 
-          {/* Search */}
           <div className="relative w-full lg:w-72">
             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">🔍</span>
             <input 
@@ -260,7 +254,6 @@ const InventoryManagement: React.FC = () => {
           </div>
         </div>
 
-        {/* Table */}
         <div className="overflow-x-auto flex-1">
           <table className="w-full text-left border-collapse">
             <thead className="bg-slate-50 text-slate-500 text-[10px] uppercase font-bold tracking-widest sticky top-0 z-10">
@@ -275,9 +268,11 @@ const InventoryManagement: React.FC = () => {
             </thead>
             <tbody className="divide-y divide-slate-50 text-sm">
               {filteredItems.map(item => {
-                const stockPercent = Math.min(100, (item.quantity / (item.minThreshold * 4)) * 100);
+                const stockPercent = item.minThreshold > 0 ? Math.min(100, (item.quantity / (item.minThreshold * 4)) * 100) : 100;
                 const isLow = item.quantity <= item.minThreshold;
                 const value = item.quantity * (item.pricePerUnit || 0);
+                const isBag = item.unit.toLowerCase().includes('bag');
+                const kgValue = isBag ? item.quantity * 50 : null;
 
                 return (
                   <tr 
@@ -297,17 +292,27 @@ const InventoryManagement: React.FC = () => {
                         item.category === 'FEED' ? 'bg-amber-100 text-amber-700' :
                         item.category === 'MEDICINE' ? 'bg-red-100 text-red-700' :
                         item.category === 'EQUIPMENT' ? 'bg-blue-100 text-blue-700' :
+                        item.category === 'PRODUCE' ? 'bg-emerald-100 text-emerald-700' :
+                        item.category === 'MEAT' ? 'bg-pink-100 text-pink-700' :
+                        item.category === 'BYPRODUCT' ? 'bg-gray-100 text-gray-700' :
                         'bg-teal-100 text-teal-700'
                       }`}>
                         {item.category}
                       </span>
                     </td>
                     <td className="px-6 py-4">
-                      <div className="flex justify-between text-xs mb-1.5">
-                        <span className={`font-bold ${isLow ? 'text-red-600' : 'text-slate-700'}`}>
-                          {item.quantity.toLocaleString()} <span className="text-slate-400 font-normal">{item.unit}</span>
-                        </span>
-                        {isLow && <span className="text-red-500 font-bold text-[10px] bg-white border border-red-200 px-1.5 rounded">LOW</span>}
+                      <div className="flex justify-between items-start text-xs mb-1.5">
+                        <div className="flex flex-col">
+                            <span className={`font-bold ${isLow ? 'text-red-600' : 'text-slate-700'}`}>
+                              {item.quantity.toLocaleString()} <span className="text-slate-400 font-normal">{item.unit}</span>
+                            </span>
+                            {kgValue !== null && (
+                                <span className="text-[10px] text-slate-400 font-medium mt-0.5">
+                                    ≈ {kgValue.toLocaleString()} kg
+                                </span>
+                            )}
+                        </div>
+                        {isLow && <span className="text-red-500 font-bold text-[10px] bg-white border border-red-200 px-1.5 py-0.5 rounded">LOW</span>}
                       </div>
                       <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
                         <div 
@@ -341,7 +346,7 @@ const InventoryManagement: React.FC = () => {
                               ✎
                             </button>
                             <button 
-                              onClick={() => handleDelete(item.id)}
+                              onClick={() => promptDelete(item.id)}
                               className="p-2 bg-slate-100 text-slate-500 rounded-lg hover:bg-red-100 hover:text-red-600"
                               title="Delete"
                             >
@@ -349,7 +354,6 @@ const InventoryManagement: React.FC = () => {
                             </button>
                          </div>
                        )}
-                       {isReadOnly && <span className="text-xs text-slate-400">View Only</span>}
                     </td>
                   </tr>
                 );
@@ -366,9 +370,6 @@ const InventoryManagement: React.FC = () => {
         </div>
       </div>
 
-      {/* --- Modals --- */}
-
-      {/* 1. Item Modal (Create/Edit) */}
       {isItemModalOpen && !isReadOnly && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
           <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
@@ -399,17 +400,30 @@ const InventoryManagement: React.FC = () => {
                       <option value="MEDICINE">Medicine</option>
                       <option value="EQUIPMENT">Equipment</option>
                       <option value="BIRDS">Birds</option>
+                      <option value="PRODUCE">Produce (Eggs)</option>
+                      <option value="MEAT">Meat</option>
+                      <option value="BYPRODUCT">Byproduct</option>
                     </select>
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Unit Type</label>
                     <input 
                       type="text" 
+                      list="unitOptions"
                       className="w-full p-3 rounded-xl border border-slate-200"
-                      placeholder="bags, vials, units..."
+                      placeholder="bags, vials, kg..."
                       value={itemForm.unit}
                       onChange={e => setItemForm({ ...itemForm, unit: e.target.value })}
                     />
+                    <datalist id="unitOptions">
+                      <option value="bags" />
+                      <option value="kg" />
+                      <option value="liters" />
+                      <option value="vials" />
+                      <option value="pieces" />
+                      <option value="bottles" />
+                      <option value="cartons" />
+                    </datalist>
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Current Stock</label>
@@ -451,7 +465,6 @@ const InventoryManagement: React.FC = () => {
         </div>
       )}
 
-      {/* 2. Stock Adjustment Modal */}
       {isStockModalOpen && selectedItem && !isReadOnly && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
           <div className="bg-white rounded-3xl w-full max-w-sm shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
@@ -480,7 +493,9 @@ const InventoryManagement: React.FC = () => {
 
                <div className="text-center py-2">
                  <p className="text-xs text-slate-400 uppercase font-bold">Current Stock</p>
-                 <p className="text-2xl font-bold text-slate-800">{selectedItem.quantity} <span className="text-sm font-normal text-slate-400">{selectedItem.unit}</span></p>
+                 <p className="text-2xl font-bold text-slate-800">
+                    {selectedItem.quantity} <span className="text-sm font-normal text-slate-400">{selectedItem.unit}</span>
+                 </p>
                </div>
 
                <div>
@@ -498,10 +513,9 @@ const InventoryManagement: React.FC = () => {
                  />
                </div>
 
-               {/* Cost Input for Restocking */}
                {stockForm.action === 'RESTOCK' && (
                  <div>
-                    <label className="block text-xs font-bold text-emerald-600 uppercase mb-1">Total Cost (Optional)</label>
+                    <label className="block text-xs font-bold text-emerald-600 uppercase mb-1">Total Net Expense (Optional)</label>
                     <input 
                         type="number"
                         min="0"
@@ -511,20 +525,8 @@ const InventoryManagement: React.FC = () => {
                         value={stockForm.cost}
                         onChange={e => setStockForm({ ...stockForm, cost: e.target.value })}
                     />
-                    <p className="text-[9px] text-slate-400 mt-1">Entering cost will log a financial expense.</p>
                  </div>
                )}
-
-               <div>
-                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Notes / Reason</label>
-                 <input 
-                    type="text"
-                    className="w-full p-3 rounded-xl border border-slate-200"
-                    placeholder="e.g. Weekly delivery"
-                    value={stockForm.notes}
-                    onChange={e => setStockForm({ ...stockForm, notes: e.target.value })}
-                 />
-               </div>
 
                <button 
                  type="submit" 
@@ -540,6 +542,18 @@ const InventoryManagement: React.FC = () => {
         </div>
       )}
 
+      {deleteModalOpen && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl w-full max-w-sm shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200 p-6 text-center">
+            <h3 className="text-xl font-bold text-slate-800 mb-2">Delete Item?</h3>
+            <p className="text-slate-500 mb-6">Are you sure you want to permanently remove this item from inventory?</p>
+            <div className="flex gap-3">
+              <button onClick={() => setDeleteModalOpen(false)} className="flex-1 py-3 rounded-xl font-bold text-slate-700 bg-slate-100 hover:bg-slate-200">Cancel</button>
+              <button onClick={confirmDelete} className="flex-1 py-3 rounded-xl font-bold text-white bg-red-500 hover:bg-red-600 shadow-lg">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

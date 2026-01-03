@@ -8,7 +8,8 @@ import { UserRole } from '../types';
 const SettingsManagement: React.FC = () => {
   const { 
     items, consumptionRecords, eggLogs, salesRecords, 
-    transactions, tasks, flocks, healthRecords 
+    transactions, tasks, flocks, healthRecords,
+    deleteFlock, deleteItem, deleteSale, deleteTransaction, deleteHealthRecord
   } = useInventory();
   const { addNotification } = useNotification();
 
@@ -25,7 +26,12 @@ const SettingsManagement: React.FC = () => {
         lowStock: true,
         diseaseAlerts: true,
         taskReminders: true,
+        reminderDaysBefore: 1, // Default 1 day advance notice
         emailReports: false
+    },
+    financials: {
+        defaultVatRate: 15,
+        defaultWhtRate: 2
     }
   });
 
@@ -36,10 +42,27 @@ const SettingsManagement: React.FC = () => {
   const [isAddUserModalOpen, setIsAddUserModalOpen] = useState(false);
   const [newUser, setNewUser] = useState({ email: '', fullName: '', roleId: '' });
 
+  // Data Management State
+  const [forceDeleteId, setForceDeleteId] = useState('');
+  const [forceDeleteType, setForceDeleteType] = useState('FLOCK');
+
   useEffect(() => {
     const saved = localStorage.getItem('awra_settings');
     if (saved) {
-        setSettings(JSON.parse(saved));
+        // Merge saved settings with default to ensure new keys exist
+        const parsed = JSON.parse(saved);
+        setSettings(prev => ({
+            ...prev,
+            ...parsed,
+            notifications: {
+                ...prev.notifications,
+                ...(parsed.notifications || {})
+            },
+            financials: {
+                ...prev.financials,
+                ...(parsed.financials || {})
+            }
+        }));
     }
   }, []);
 
@@ -172,6 +195,38 @@ const SettingsManagement: React.FC = () => {
     addNotification('INFO', 'Export Complete', 'Database backup has been downloaded.');
   };
 
+  const handleForceDelete = async () => {
+      if (!forceDeleteId) return;
+      if (!confirm(`Are you SURE you want to permanently delete ${forceDeleteType} with ID: ${forceDeleteId}? This cannot be undone.`)) return;
+
+      try {
+          switch(forceDeleteType) {
+              case 'FLOCK':
+                  await deleteFlock(forceDeleteId);
+                  break;
+              case 'INVENTORY':
+                  await deleteItem(forceDeleteId);
+                  break;
+              case 'SALE':
+                  await deleteSale(forceDeleteId);
+                  break;
+              case 'TRANSACTION':
+                  await deleteTransaction(forceDeleteId);
+                  break;
+              case 'HEALTH':
+                  await deleteHealthRecord(forceDeleteId);
+                  break;
+              default:
+                  addNotification('ERROR', 'Invalid Type', 'Unknown record type.');
+                  return;
+          }
+          setForceDeleteId('');
+          // Success notification is handled by the context function
+      } catch (e: any) {
+          addNotification('ERROR', 'Delete Failed', e.message);
+      }
+  };
+
   return (
     <div className="space-y-8 animate-in fade-in duration-500 pb-20">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4">
@@ -199,7 +254,7 @@ const SettingsManagement: React.FC = () => {
                         onClick={() => setActiveSection('GENERAL')}
                         className={`text-left px-4 py-3 rounded-xl text-sm font-bold transition-all ${activeSection === 'GENERAL' ? 'bg-teal-50 text-teal-700' : 'text-slate-600 hover:bg-slate-50'}`}
                       >
-                          🏠 General Profile
+                          🏠 General & Finance
                       </button>
                       <button 
                         onClick={() => setActiveSection('NOTIFICATIONS')}
@@ -228,43 +283,87 @@ const SettingsManagement: React.FC = () => {
               <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-8 min-h-[500px]">
                   
                   {activeSection === 'GENERAL' && (
-                      <div className="space-y-6 max-w-2xl animate-in fade-in">
-                          <h3 className="text-xl font-bold text-slate-800 border-b border-slate-100 pb-4 mb-6">General Farm Profile</h3>
-                          
-                          <div className="space-y-4">
-                              <div>
-                                  <label className="block text-sm font-bold text-slate-700 mb-2">Farm Name</label>
-                                  <input 
-                                    type="text" 
-                                    value={settings.farmName}
-                                    onChange={(e) => setSettings({...settings, farmName: e.target.value})}
-                                    className="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-teal-500 outline-none"
-                                  />
-                              </div>
-                              <div className="grid grid-cols-2 gap-4">
-                                  <div>
-                                      <label className="block text-sm font-bold text-slate-700 mb-2">Owner / Manager</label>
-                                      <input 
+                      <div className="space-y-8 max-w-2xl animate-in fade-in">
+                          {/* Farm Profile */}
+                          <div>
+                            <h3 className="text-xl font-bold text-slate-800 border-b border-slate-100 pb-4 mb-6">General Farm Profile</h3>
+                            
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="block text-sm font-bold text-slate-700 mb-2">Farm Name</label>
+                                    <input 
                                         type="text" 
-                                        value={settings.ownerName}
-                                        onChange={(e) => setSettings({...settings, ownerName: e.target.value})}
+                                        value={settings.farmName}
+                                        onChange={(e) => setSettings({...settings, farmName: e.target.value})}
                                         className="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-teal-500 outline-none"
-                                      />
-                                  </div>
-                                  <div>
-                                      <label className="block text-sm font-bold text-slate-700 mb-2">Primary Currency</label>
-                                      <select 
-                                        value={settings.currency}
-                                        onChange={(e) => setSettings({...settings, currency: e.target.value})}
-                                        className="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-teal-500 outline-none"
-                                      >
-                                          <option value="ETB">ETB (Br)</option>
-                                          <option value="USD">USD ($)</option>
-                                          <option value="EUR">EUR (€)</option>
-                                          <option value="GBP">GBP (£)</option>
-                                      </select>
-                                  </div>
-                              </div>
+                                    />
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 mb-2">Owner / Manager</label>
+                                        <input 
+                                            type="text" 
+                                            value={settings.ownerName}
+                                            onChange={(e) => setSettings({...settings, ownerName: e.target.value})}
+                                            className="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-teal-500 outline-none"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 mb-2">Primary Currency</label>
+                                        <select 
+                                            value={settings.currency}
+                                            onChange={(e) => setSettings({...settings, currency: e.target.value})}
+                                            className="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-teal-500 outline-none"
+                                        >
+                                            <option value="ETB">ETB (Br)</option>
+                                            <option value="USD">USD ($)</option>
+                                            <option value="EUR">EUR (€)</option>
+                                            <option value="GBP">GBP (£)</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+                          </div>
+
+                          {/* Financial Settings */}
+                          <div>
+                            <h3 className="text-xl font-bold text-slate-800 border-b border-slate-100 pb-4 mb-6">Financial Configuration</h3>
+                            <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100 space-y-4">
+                                <div className="grid grid-cols-2 gap-6">
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 mb-2">Default VAT Rate (%)</label>
+                                        <input 
+                                            type="number" 
+                                            min="0"
+                                            max="100"
+                                            step="0.1"
+                                            value={settings.financials.defaultVatRate}
+                                            onChange={(e) => setSettings({
+                                                ...settings, 
+                                                financials: {...settings.financials, defaultVatRate: parseFloat(e.target.value)}
+                                            })}
+                                            className="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-teal-500 outline-none"
+                                        />
+                                        <p className="text-xs text-slate-400 mt-1">Applied to sales and taxable purchases.</p>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-bold text-slate-700 mb-2">Default WHT Rate (%)</label>
+                                        <input 
+                                            type="number" 
+                                            min="0"
+                                            max="100"
+                                            step="0.1"
+                                            value={settings.financials.defaultWhtRate}
+                                            onChange={(e) => setSettings({
+                                                ...settings, 
+                                                financials: {...settings.financials, defaultWhtRate: parseFloat(e.target.value)}
+                                            })}
+                                            className="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-teal-500 outline-none"
+                                        />
+                                        <p className="text-xs text-slate-400 mt-1">Withholding tax rate for transactions.</p>
+                                    </div>
+                                </div>
+                            </div>
                           </div>
                       </div>
                   )}
@@ -366,37 +465,108 @@ const SettingsManagement: React.FC = () => {
                                       <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:bg-teal-600"></div>
                                   </label>
                               </div>
-                              <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-100">
-                                  <div>
-                                      <h4 className="font-bold text-slate-800">Task Reminders</h4>
-                                      <p className="text-xs text-slate-500">Notify assigned users when tasks are due or overdue.</p>
+                              <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+                                  <div className="flex items-center justify-between mb-3">
+                                      <div>
+                                          <h4 className="font-bold text-slate-800">Task Reminders</h4>
+                                          <p className="text-xs text-slate-500">Enable automatic alerts for tasks nearing their due date.</p>
+                                      </div>
+                                      <label className="relative inline-flex items-center cursor-pointer">
+                                          <input type="checkbox" checked={settings.notifications.taskReminders} onChange={(e) => setSettings({...settings, notifications: {...settings.notifications, taskReminders: e.target.checked}})} className="sr-only peer" />
+                                          <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:bg-teal-600"></div>
+                                      </label>
                                   </div>
-                                  <label className="relative inline-flex items-center cursor-pointer">
-                                      <input type="checkbox" checked={settings.notifications.taskReminders} onChange={(e) => setSettings({...settings, notifications: {...settings.notifications, taskReminders: e.target.checked}})} className="sr-only peer" />
-                                      <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:bg-teal-600"></div>
-                                  </label>
+                                  {settings.notifications.taskReminders && (
+                                      <div className="flex items-center gap-3 pt-3 border-t border-slate-200 animate-in slide-in-from-top-2">
+                                          <span className="text-sm text-slate-600 font-medium">Trigger alert</span>
+                                          <input 
+                                            type="number" 
+                                            min="0"
+                                            max="30"
+                                            value={settings.notifications.reminderDaysBefore}
+                                            onChange={(e) => setSettings({
+                                                ...settings, 
+                                                notifications: {
+                                                    ...settings.notifications, 
+                                                    reminderDaysBefore: parseInt(e.target.value) || 0
+                                                }
+                                            })}
+                                            className="w-20 p-2 text-center text-sm font-bold border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 outline-none"
+                                          />
+                                          <span className="text-sm text-slate-600 font-medium">days before due date.</span>
+                                      </div>
+                                  )}
                               </div>
                           </div>
                       </div>
                   )}
 
                   {activeSection === 'DATA' && (
-                      <div className="space-y-6 max-w-2xl animate-in fade-in">
-                          <h3 className="text-xl font-bold text-slate-800 border-b border-slate-100 pb-4 mb-6">Data Management</h3>
-                          <div className="p-6 bg-blue-50 rounded-2xl border border-blue-100">
-                              <div className="flex items-start gap-4">
-                                  <div className="text-2xl">📦</div>
-                                  <div className="flex-1">
-                                      <h4 className="font-bold text-blue-900">Export Database</h4>
-                                      <p className="text-sm text-blue-700 mt-1">Download backup of current farm data.</p>
-                                  </div>
-                              </div>
-                              <button 
-                                onClick={handleExportData}
-                                className="mt-4 w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl font-bold shadow-lg transition-all"
-                              >
-                                  Download Backup (.json)
-                              </button>
+                      <div className="space-y-8 animate-in fade-in">
+                          <div>
+                            <h3 className="text-xl font-bold text-slate-800 border-b border-slate-100 pb-4 mb-6">Data Management</h3>
+                            <div className="p-6 bg-blue-50 rounded-2xl border border-blue-100">
+                                <div className="flex items-start gap-4">
+                                    <div className="text-2xl">📦</div>
+                                    <div className="flex-1">
+                                        <h4 className="font-bold text-blue-900">Export Database</h4>
+                                        <p className="text-sm text-blue-700 mt-1">Download backup of current farm data.</p>
+                                    </div>
+                                </div>
+                                <button 
+                                    onClick={handleExportData}
+                                    className="mt-4 w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl font-bold shadow-lg transition-all"
+                                >
+                                    Download Backup (.json)
+                                </button>
+                            </div>
+                          </div>
+
+                          <div className="pt-4 border-t border-slate-100">
+                             <h4 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                                <span className="text-red-500">⚠️</span> Advanced Record Management
+                             </h4>
+                             <p className="text-xs text-slate-500 mb-4">
+                                Manually delete specific records by ID (e.g. F0084). Use with caution as this performs a hard delete including related dependencies.
+                             </p>
+                             
+                             <div className="p-5 bg-red-50 rounded-2xl border border-red-100 space-y-4">
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    <div>
+                                        <label className="block text-xs font-bold text-red-800 uppercase mb-1">Record Type</label>
+                                        <select 
+                                            className="w-full p-3 rounded-xl border border-red-200 bg-white focus:ring-2 focus:ring-red-500 outline-none text-sm"
+                                            value={forceDeleteType}
+                                            onChange={(e) => setForceDeleteType(e.target.value)}
+                                        >
+                                            <option value="FLOCK">Flock</option>
+                                            <option value="INVENTORY">Inventory Item</option>
+                                            <option value="SALE">Sale Record</option>
+                                            <option value="TRANSACTION">Transaction</option>
+                                            <option value="HEALTH">Health Record</option>
+                                        </select>
+                                    </div>
+                                    <div className="md:col-span-2">
+                                        <label className="block text-xs font-bold text-red-800 uppercase mb-1">Target ID</label>
+                                        <div className="flex gap-2">
+                                            <input 
+                                                type="text" 
+                                                className="flex-1 p-3 rounded-xl border border-red-200 bg-white focus:ring-2 focus:ring-red-500 outline-none text-sm font-mono"
+                                                placeholder="e.g. F0084"
+                                                value={forceDeleteId}
+                                                onChange={(e) => setForceDeleteId(e.target.value)}
+                                            />
+                                            <button 
+                                                onClick={handleForceDelete}
+                                                disabled={!forceDeleteId}
+                                                className="bg-red-600 hover:bg-red-700 disabled:bg-red-300 text-white px-6 rounded-xl font-bold shadow-lg transition-all"
+                                            >
+                                                Force Delete
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                             </div>
                           </div>
                       </div>
                   )}

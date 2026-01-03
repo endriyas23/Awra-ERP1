@@ -21,9 +21,9 @@ const Sidebar: React.FC = () => {
       case UserRole.MANAGER:
         return ['ALL']; // Access everything
       case UserRole.ACCOUNTANT:
-        return ['', 'inventory', 'sales', 'finance', 'hr', 'analytics', 'settings', 'calendar'];
+        return ['', 'inventory', 'sales', 'finance', 'hr', 'settings', 'calendar'];
       case UserRole.VETERINARIAN:
-        return ['', 'flock', 'health', 'feed', 'inventory', 'analytics', 'calendar'];
+        return ['', 'flock', 'health', 'feed', 'inventory', 'calendar'];
       case UserRole.FARM_WORKER:
         return ['', 'flock', 'feed', 'inventory', 'production', 'calendar'];
       default:
@@ -44,7 +44,6 @@ const Sidebar: React.FC = () => {
       { id: 'sales', label: 'Sales & Orders', icon: '💰' },
       { id: 'finance', label: 'Financials', icon: '📉' },
       { id: 'hr', label: 'HR & Teams', icon: '👥' },
-      { id: 'analytics', label: 'Deep Analytics', icon: '📈' },
       { id: 'settings', label: 'Settings', icon: '⚙️' },
     ];
 

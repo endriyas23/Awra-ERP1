@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, BarChart, Bar, ReferenceLine } from 'recharts';
 import StatCard from '../components/StatCard';
 import { useInventory } from '../context/InventoryContext';
@@ -29,17 +29,57 @@ const FinanceManagement: React.FC = () => {
     end: new Date().toISOString().split('T')[0] // Today
   });
 
+  // Default Tax Rates
+  const [defaultRates, setDefaultRates] = useState({ vat: 15, wht: 2 });
+
+  useEffect(() => {
+      const saved = localStorage.getItem('awra_settings');
+      if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed.financials) {
+              setDefaultRates({
+                  vat: parsed.financials.defaultVatRate || 15,
+                  wht: parsed.financials.defaultWhtRate || 2
+              });
+          }
+      }
+  }, []);
+
   // Form State
   const [form, setForm] = useState({
     date: new Date().toISOString().split('T')[0],
     description: '',
     baseAmount: '', 
+    vatRate: '0',
     vatAmount: '',
+    whtRate: '0',
     withholdingAmount: '',
     type: 'EXPENSE' as TransactionType,
     category: 'OTHER',
     status: 'COMPLETED' as 'COMPLETED' | 'PENDING' | 'CANCELLED'
   });
+
+  // Auto-Calculate Taxes when Base Amount or Rates change
+  useEffect(() => {
+      if (isModalOpen) {
+          const base = parseFloat(form.baseAmount) || 0;
+          const vRate = parseFloat(form.vatRate) || 0;
+          const wRate = parseFloat(form.whtRate) || 0;
+          
+          if (base > 0) {
+              const vAmount = base * (vRate / 100);
+              const wAmount = base * (wRate / 100);
+              
+              // Only update if user hasn't manually overridden amounts (simple check: usually we just overwrite)
+              // Ideally we'd have a 'isManual' flag but for simplicity, we auto-calc if rates are present
+              setForm(f => ({
+                  ...f,
+                  vatAmount: vAmount.toFixed(2),
+                  withholdingAmount: wAmount.toFixed(2)
+              }));
+          }
+      }
+  }, [form.baseAmount, form.vatRate, form.whtRate, isModalOpen]);
 
   // --- Helpers ---
   const setDatePreset = (preset: 'THIS_MONTH' | 'LAST_MONTH' | 'THIS_YEAR' | 'LAST_30_DAYS') => {
@@ -219,11 +259,16 @@ const FinanceManagement: React.FC = () => {
   const handleOpenModal = (transaction?: FinancialTransaction) => {
     if (transaction) {
       setEditingId(transaction.id);
+      // Reverse calc base if VAT is present
+      const base = transaction.amount - (transaction.vatAmount || 0) + (transaction.withholdingAmount || 0);
+      
       setForm({
         date: transaction.date,
         description: transaction.description,
-        baseAmount: (transaction.amount - (transaction.vatAmount || 0) + (transaction.withholdingAmount || 0)).toString(),
+        baseAmount: base.toString(),
+        vatRate: '0', // Can't easily infer rate from amount without stored rate, defaulting to manual/0
         vatAmount: (transaction.vatAmount || '').toString(),
+        whtRate: '0',
         withholdingAmount: (transaction.withholdingAmount || '').toString(),
         type: transaction.type,
         category: transaction.category,
@@ -235,7 +280,9 @@ const FinanceManagement: React.FC = () => {
         date: new Date().toISOString().split('T')[0],
         description: '',
         baseAmount: '',
+        vatRate: defaultRates.vat.toString(),
         vatAmount: '',
+        whtRate: defaultRates.wht.toString(),
         withholdingAmount: '',
         type: 'EXPENSE',
         category: 'OTHER',
@@ -406,7 +453,7 @@ const FinanceManagement: React.FC = () => {
                             <span className="flex items-center gap-1 text-red-500"><span className="w-2 h-2 rounded-full bg-red-500"></span> Expense</span>
                         </div>
                         </div>
-                        <div className="h-72">
+                        <div className="h-72 w-full">
                             <ResponsiveContainer width="100%" height="100%">
                             <AreaChart data={trendData}>
                                 <defs>
@@ -433,7 +480,7 @@ const FinanceManagement: React.FC = () => {
                   {/* Expense Breakdown Pie */}
                   <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
                         <h3 className="text-lg font-bold text-slate-800 mb-6">Expense Distribution</h3>
-                        <div className="h-64">
+                        <div className="h-64 w-full">
                             <ResponsiveContainer width="100%" height="100%">
                             <PieChart>
                                 <Pie
@@ -505,7 +552,7 @@ const FinanceManagement: React.FC = () => {
                   {/* P&L Visualization */}
                   <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-6 flex flex-col">
                       <h3 className="text-lg font-bold text-slate-800 mb-6">Financial Performance Visualization</h3>
-                      <div className="flex-1 min-h-[300px]">
+                      <div className="flex-1 min-h-[300px] w-full">
                           <ResponsiveContainer width="100%" height="100%">
                               <BarChart data={pnlChartData} barSize={60}>
                                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
@@ -569,7 +616,7 @@ const FinanceManagement: React.FC = () => {
                   {/* Balance Sheet Visualization */}
                   <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-6 flex flex-col">
                       <h3 className="text-lg font-bold text-slate-800 mb-6">Assets vs Liabilities Composition</h3>
-                      <div className="flex-1 min-h-[300px]">
+                      <div className="flex-1 min-h-[300px] w-full">
                           <ResponsiveContainer width="100%" height="100%">
                               <BarChart data={balanceSheetChartData} layout="vertical" margin={{left: 20}}>
                                   <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke="#f1f5f9" />
@@ -728,7 +775,7 @@ const FinanceManagement: React.FC = () => {
                           <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-[#6366f1]"></span> Health</span>
                       </div>
                   </div>
-                  <div className="h-80">
+                  <div className="h-80 w-full">
                      <ResponsiveContainer width="100%" height="100%">
                          <BarChart data={flockCostAnalysis} layout="vertical" barSize={32} margin={{left: 40}}>
                              <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
@@ -749,7 +796,7 @@ const FinanceManagement: React.FC = () => {
       {/* New/Edit Transaction Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
-          <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+          <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto">
              <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-teal-50/50">
                <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">{editingId ? 'Edit Transaction' : 'New Transaction'}</h3>
                <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-600">✕</button>
@@ -778,20 +825,38 @@ const FinanceManagement: React.FC = () => {
                   </div>
                </div>
 
-               <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">VAT Amount ($)</label>
-                    <input type="number" min="0" step="0.01" className="w-full p-3 rounded-xl border border-slate-200" placeholder="Optional" value={form.vatAmount} onChange={e => setForm({...form, vatAmount: e.target.value})} />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Withholding ($)</label>
-                    <input type="number" min="0" step="0.01" className="w-full p-3 rounded-xl border border-slate-200" placeholder="Optional" value={form.withholdingAmount} onChange={e => setForm({...form, withholdingAmount: e.target.value})} />
-                  </div>
+               {/* Tax Calculation Section */}
+               <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 space-y-3">
+                   <div className="flex justify-between items-center pb-2 border-b border-slate-200">
+                       <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Tax Calculation</span>
+                   </div>
+                   
+                   <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">VAT Rate %</label>
+                            <input type="number" min="0" step="0.1" className="w-full p-2 text-sm rounded-lg border border-slate-200 outline-none" placeholder="0" value={form.vatRate} onChange={e => setForm({...form, vatRate: e.target.value})} />
+                        </div>
+                        <div>
+                            <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">VAT Amount ($)</label>
+                            <input type="number" min="0" step="0.01" className="w-full p-2 text-sm rounded-lg border border-slate-200 outline-none bg-white" placeholder="0.00" value={form.vatAmount} onChange={e => setForm({...form, vatAmount: e.target.value})} />
+                        </div>
+                   </div>
+
+                   <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">WHT Rate %</label>
+                            <input type="number" min="0" step="0.1" className="w-full p-2 text-sm rounded-lg border border-slate-200 outline-none" placeholder="0" value={form.whtRate} onChange={e => setForm({...form, whtRate: e.target.value})} />
+                        </div>
+                        <div>
+                            <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">WHT Amount ($)</label>
+                            <input type="number" min="0" step="0.01" className="w-full p-2 text-sm rounded-lg border border-slate-200 outline-none bg-white text-red-500" placeholder="0.00" value={form.withholdingAmount} onChange={e => setForm({...form, withholdingAmount: e.target.value})} />
+                        </div>
+                   </div>
                </div>
                
-               <div className="bg-slate-50 p-3 rounded-xl flex justify-between items-center border border-slate-100">
-                  <span className="text-xs text-slate-500 font-bold uppercase">Net Cash Flow</span>
-                  <span className="text-lg font-bold text-slate-800">${previewCashFlow().toLocaleString()}</span>
+               <div className="bg-slate-800 p-3 rounded-xl flex justify-between items-center text-white">
+                  <span className="text-xs font-bold uppercase opacity-70">Net Cash Flow</span>
+                  <span className="text-xl font-bold">${previewCashFlow().toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                </div>
 
                <div className="grid grid-cols-2 gap-4">

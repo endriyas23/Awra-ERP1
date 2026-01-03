@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { HashRouter, Routes, Route, Navigate, useNavigate, Outlet } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
 import Dashboard from './pages/Dashboard';
@@ -12,7 +12,6 @@ import ProductionManagement from './pages/ProductionManagement';
 import SalesManagement from './pages/SalesManagement';
 import FinanceManagement from './pages/FinanceManagement';
 import HRManagement from './pages/HRManagement';
-import AnalyticsManagement from './pages/AnalyticsManagement';
 import SettingsManagement from './pages/SettingsManagement';
 import CalendarManagement from './pages/CalendarManagement';
 import Profile from './pages/Profile';
@@ -225,6 +224,18 @@ const AppHeader: React.FC = () => {
 const ProtectedLayout: React.FC = () => {
   const { loading, isPending } = useAuth();
   const { notifications, removeNotification } = useNotification();
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   if (loading) {
     return (
@@ -239,6 +250,11 @@ const ProtectedLayout: React.FC = () => {
         <div className="flex bg-slate-50 min-h-screen">
           <Sidebar />
           <main className="flex-1 ml-64 min-h-screen flex flex-col relative">
+            {!isOnline && (
+                <div className="bg-amber-600 text-white text-xs font-bold text-center py-2 sticky top-0 z-[60] shadow-md animate-in slide-in-from-top-1">
+                    📡 You are currently offline. Changes are saved locally and will sync when connection is restored.
+                </div>
+            )}
             <AppHeader />
             
             {/* Toast Container */}
@@ -285,7 +301,6 @@ const AppRoutes = () => {
         <Route path="/sales" element={<SalesManagement />} />
         <Route path="/finance" element={<FinanceManagement />} />
         <Route path="/hr" element={<HRManagement />} />
-        <Route path="/analytics" element={<AnalyticsManagement />} />
         <Route path="/settings" element={<SettingsManagement />} />
         
         <Route path="*" element={<Navigate to="/" replace />} />
