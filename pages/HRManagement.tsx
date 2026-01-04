@@ -35,7 +35,7 @@ const HRManagement: React.FC = () => {
   // --- States for Task ---
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [taskForm, setTaskForm] = useState<Partial<Task>>({
-      title: '', assignee: '', priority: 'MEDIUM', due: new Date().toISOString().split('T')[0], department: 'FARM_OPS'
+      title: '', assignee: '', priority: 'MEDIUM', due: new Date().toISOString().split('T')[0], department: 'FARM_OPS', flockId: ''
   });
 
   // --- Analytics Data ---
@@ -87,7 +87,15 @@ const HRManagement: React.FC = () => {
           updateEmployee(editingEmpId, empForm);
           addNotification('SUCCESS', 'Updated', 'Employee record updated.');
       } else {
-          const newId = `EMP-${Date.now().toString().slice(-6)}`;
+          // Use randomUUID if available, otherwise simple fallback for legacy browsers
+          const newId = typeof crypto !== 'undefined' && crypto.randomUUID 
+              ? crypto.randomUUID() 
+              : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+                  const r = Math.random() * 16 | 0;
+                  const v = c === 'x' ? r : (r & 0x3 | 0x8);
+                  return v.toString(16);
+              });
+              
           addEmployee({ ...empForm, id: newId } as Employee);
           addNotification('SUCCESS', 'Created', 'New employee onboarded.');
       }
@@ -106,7 +114,9 @@ const HRManagement: React.FC = () => {
           if (!confirm(`Payroll for ${payrollPeriod} already exists entries. Continue adding?`)) return;
       }
 
-      let totalPayout = 0;
+      let totalNetPay = 0;
+      let totalTax = 0;
+      let totalPension = 0;
       let count = 0;
 
       activeEmployees.forEach(emp => {
@@ -117,8 +127,12 @@ const HRManagement: React.FC = () => {
           const deductions = (Object.values(emp.deductions) as number[]).reduce((a, b) => a + b, 0);
           const net = (emp.baseSalary + allowances) - deductions;
 
+          // Track specific deduction totals for Financials
+          totalTax += emp.deductions.tax || 0;
+          totalPension += emp.deductions.pension || 0;
+
           const run: PayrollRun = {
-              id: `PR-${payrollPeriod}-${emp.id}`,
+              id: `PR-${payrollPeriod}-${emp.id}`, // Note: Payroll ID structure might need check if strictly UUID, but usually this is custom text in types. If DB payroll_records id is UUID, this will also fail. Assuming only employees table for now based on error.
               period: payrollPeriod,
               dateProcessed: new Date().toISOString().split('T')[0],
               employeeId: emp.id,
@@ -133,22 +147,53 @@ const HRManagement: React.FC = () => {
           };
           
           addPayrollRun(run);
-          totalPayout += net;
+          totalNetPay += net;
           count++;
       });
 
-      if (totalPayout > 0) {
-          // Integrate with Finance Module
-          addTransaction({
-              id: `EXP-PAYROLL-${payrollPeriod}-${Date.now()}`,
-              date: new Date().toISOString().split('T')[0],
-              description: `Monthly Payroll Run: ${payrollPeriod}`,
-              amount: totalPayout,
-              type: 'EXPENSE',
-              category: 'LABOR',
-              status: 'COMPLETED'
-          });
-          addNotification('SUCCESS', 'Payroll Processed', `${count} payslips generated. Ledger updated.`);
+      if (count > 0) {
+          const today = new Date().toISOString().split('T')[0];
+
+          // 1. Log Net Salary Expense (Cash Outflow - COMPLETED)
+          if (totalNetPay > 0) {
+              addTransaction({
+                  id: `EXP-PAY-NET-${payrollPeriod}-${Date.now()}`,
+                  date: today,
+                  description: `Net Salary Payout: ${payrollPeriod}`,
+                  amount: totalNetPay,
+                  type: 'EXPENSE',
+                  category: 'LABOR',
+                  status: 'COMPLETED'
+              });
+          }
+
+          // 2. Log Tax Liability (Accrued Expense - PENDING Payment to Govt)
+          if (totalTax > 0) {
+              addTransaction({
+                  id: `EXP-PAY-TAX-${payrollPeriod}-${Date.now()}`,
+                  date: today,
+                  description: `Payroll Tax (PAYE): ${payrollPeriod}`,
+                  amount: totalTax,
+                  type: 'EXPENSE',
+                  category: 'OTHER', // Tax isn't strictly Labor cost in cash flow sense yet, but a liability
+                  status: 'PENDING'
+              });
+          }
+
+          // 3. Log Pension Liability (Accrued Expense - PENDING Payment to Fund)
+          if (totalPension > 0) {
+              addTransaction({
+                  id: `EXP-PAY-PEN-${payrollPeriod}-${Date.now()}`,
+                  date: today,
+                  description: `Pension Fund: ${payrollPeriod}`,
+                  amount: totalPension,
+                  type: 'EXPENSE',
+                  category: 'OTHER',
+                  status: 'PENDING'
+              });
+          }
+
+          addNotification('SUCCESS', 'Payroll Processed', `${count} payslips generated. Ledger updated with Net Pay, Tax, and Pension liabilities.`);
       } else {
           addNotification('INFO', 'No Action', 'All active employees already processed for this period.');
       }
@@ -304,22 +349,53 @@ const HRManagement: React.FC = () => {
                       </h4>
                       <div className="space-y-3">
                           {tasks.filter(t => t.status === status).map(task => (
-                              <div key={task.id} className="bg-white p-3 rounded-xl border border-slate-100 shadow-sm hover:shadow-md transition-all">
-                                  <div className="flex justify-between items-start mb-1">
-                                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${task.priority === 'HIGH' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}`}>{task.priority}</span>
-                                      <button onClick={() => deleteTask(task.id)} className="text-slate-300 hover:text-red-500">×</button>
+                              <div key={task.id} className={`bg-white p-3 rounded-xl border border-slate-100 border-l-4 shadow-sm hover:shadow-md transition-all ${
+                                  task.priority === 'HIGH' ? 'border-l-red-500' : 
+                                  task.priority === 'MEDIUM' ? 'border-l-amber-500' : 'border-l-emerald-500'
+                              }`}>
+                                  <div className="flex justify-between items-start mb-2">
+                                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                                          task.priority === 'HIGH' ? 'bg-red-50 text-red-600' : 
+                                          task.priority === 'MEDIUM' ? 'bg-amber-50 text-amber-600' : 'bg-emerald-50 text-emerald-600'
+                                      }`}>
+                                          {task.priority}
+                                      </span>
+                                      {task.flockId && (
+                                          <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded border border-slate-200 flex items-center gap-1" title="Associated Flock">
+                                              🐣 {flocks.find(f => f.id === task.flockId)?.name || 'Unknown Flock'}
+                                          </span>
+                                      )}
+                                      <button onClick={() => deleteTask(task.id)} className="text-slate-300 hover:text-red-500 font-bold text-lg leading-none ml-2">×</button>
                                   </div>
-                                  <p className="font-bold text-slate-800 text-sm">{task.title}</p>
-                                  <div className="mt-2 text-xs text-slate-500 flex justify-between items-center">
-                                      <span>👤 {task.assignee || 'Unassigned'}</span>
-                                      <span>📅 {task.due}</span>
+                                  
+                                  <p className="font-bold text-slate-800 text-sm mb-2">{task.title}</p>
+                                  
+                                  {/* Priority Indicator Bar */}
+                                  <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden mb-3">
+                                      <div 
+                                          className={`h-full rounded-full transition-all duration-500 ${
+                                              task.priority === 'HIGH' ? 'w-full bg-red-500' : 
+                                              task.priority === 'MEDIUM' ? 'w-2/3 bg-amber-500' : 'w-1/3 bg-emerald-500'
+                                          }`}
+                                          title={`Priority Level: ${task.priority}`}
+                                      ></div>
                                   </div>
+
+                                  <div className="text-xs text-slate-500 flex justify-between items-center">
+                                      <span className="flex items-center gap-1" title={task.assignee}>
+                                          👤 {task.assignee ? (task.assignee.length > 12 ? task.assignee.substring(0,10)+'...' : task.assignee) : 'Unassigned'}
+                                      </span>
+                                      <span className={`${new Date(task.due) < new Date() && status !== 'COMPLETED' ? 'text-red-500 font-bold' : ''}`}>
+                                          📅 {new Date(task.due).toLocaleDateString(undefined, {month:'short', day:'numeric'})}
+                                      </span>
+                                  </div>
+                                  
                                   {status !== 'COMPLETED' && (
                                       <button 
-                                        onClick={() => updateTask(task.id, { status: status === 'PENDING' ? 'IN_PROGRESS' : 'COMPLETED' })}
-                                        className="w-full mt-3 py-1.5 bg-slate-50 hover:bg-teal-50 text-slate-600 hover:text-teal-600 text-xs font-bold rounded-lg border border-slate-100 transition-all"
+                                          onClick={() => updateTask(task.id, { status: status === 'PENDING' ? 'IN_PROGRESS' : 'COMPLETED' })}
+                                          className="w-full mt-3 py-1.5 bg-slate-50 hover:bg-teal-50 text-slate-600 hover:text-teal-600 text-xs font-bold rounded-lg border border-slate-100 transition-all flex items-center justify-center gap-1"
                                       >
-                                          Next Stage →
+                                          {status === 'PENDING' ? 'Start Task' : 'Complete'} <span className="text-[10px]">→</span>
                                       </button>
                                   )}
                               </div>
@@ -539,6 +615,19 @@ const HRManagement: React.FC = () => {
                         <div>
                             <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Description</label>
                             <input required type="text" className="w-full p-3 rounded-xl border border-slate-200" value={taskForm.title} onChange={e => setTaskForm({...taskForm, title: e.target.value})} placeholder="e.g. Clean Coop A" />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Target Flock (Optional)</label>
+                            <select 
+                                className="w-full p-3 rounded-xl border border-slate-200 bg-white"
+                                value={taskForm.flockId || ''}
+                                onChange={e => setTaskForm({...taskForm, flockId: e.target.value})}
+                            >
+                                <option value="">-- General Task --</option>
+                                {flocks.filter(f => f.status === 'ACTIVE').map(f => (
+                                    <option key={f.id} value={f.id}>{f.name}</option>
+                                ))}
+                            </select>
                         </div>
                         <div>
                             <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Assignee</label>

@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { getDiagnosticDiagnosis } from '../services/geminiService';
 import { HealthRecord, HealthRecordType, UserRole } from '../types';
 import { useInventory } from '../context/InventoryContext';
@@ -55,6 +55,7 @@ const HealthManagement: React.FC = () => {
   // State for Health Records
   const [activeTab, setActiveTab] = useState<HealthRecordType | 'ALL'>('ALL');
   const [viewMode, setViewMode] = useState<'GRID' | 'TABLE'>('TABLE');
+  const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' }>({ key: 'date', direction: 'desc' });
   
   // State for Modal (Create/Edit)
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -338,10 +339,38 @@ const HealthManagement: React.FC = () => {
     }
   };
 
-  // --- Filtering ---
-  const filteredRecords = activeTab === 'ALL' 
-    ? healthRecords 
-    : healthRecords.filter(r => r.type === activeTab);
+  // --- Sorting & Filtering ---
+  const handleSort = (key: string) => {
+    let direction: 'asc' | 'desc' = 'asc';
+    if (sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    }
+    setSortConfig({ key, direction });
+  };
+
+  const processedRecords = useMemo(() => {
+    let data = activeTab === 'ALL' 
+      ? healthRecords 
+      : healthRecords.filter(r => r.type === activeTab);
+
+    // Sorting
+    data = [...data].sort((a, b) => {
+        let aValue: any = a[sortConfig.key as keyof HealthRecord];
+        let bValue: any = b[sortConfig.key as keyof HealthRecord];
+
+        // Derived values
+        if (sortConfig.key === 'flock') {
+            aValue = flocks.find(f => f.id === a.flockId)?.name || a.flockId;
+            bValue = flocks.find(f => f.id === b.flockId)?.name || b.flockId;
+        }
+
+        if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
+        if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
+        return 0;
+    });
+
+    return data;
+  }, [healthRecords, activeTab, sortConfig, flocks]);
 
   const getTypeColor = (type: HealthRecordType) => {
     switch (type) {
@@ -374,6 +403,11 @@ const HealthManagement: React.FC = () => {
   // Helper for UI feedback on stock
   const selectedItemData = medicineInventory.find(i => i.id === selectedInventoryId);
   const isStockInsufficient = selectedItemData && consumedQuantity > selectedItemData.quantity;
+
+  const SortIcon = ({ column }: { column: string }) => {
+      if (sortConfig.key !== column) return <span className="text-slate-300 ml-1">↕</span>;
+      return <span className="text-teal-600 ml-1">{sortConfig.direction === 'asc' ? '↑' : '↓'}</span>;
+  };
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500 pb-12">
@@ -491,7 +525,7 @@ const HealthManagement: React.FC = () => {
               )}
             </div>
             
-            <div className="flex-1 overflow-y-auto space-y-3 max-h-[220px] pr-1">
+            <div className="flex-1 overflow-y-auto space-y-3 max-h-[220px] pr-1 custom-scrollbar">
               {upcomingVaccinations.length > 0 ? (
                 upcomingVaccinations.map(vac => {
                    const date = new Date(vac.date);
@@ -557,11 +591,11 @@ const HealthManagement: React.FC = () => {
 
          {/* 5. Records Display (Grid or Table) */}
          {viewMode === 'GRID' ? (
-           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-              {filteredRecords.map(record => {
+           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 animate-in fade-in">
+              {processedRecords.map(record => {
                  const flockName = flocks.find(f => f.id === record.flockId)?.name || record.flockId;
                  return (
-                   <div key={record.id} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 hover:shadow-md transition-all relative group">
+                   <div key={record.id} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 hover:shadow-md transition-all relative group flex flex-col">
                       <div className="flex justify-between items-start mb-3">
                          <span className={`px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5 ${getTypeColor(record.type)}`}>
                             <span>{getTypeIcon(record.type)}</span> {record.type}
@@ -592,7 +626,7 @@ const HealthManagement: React.FC = () => {
                       <h3 className="font-bold text-slate-800 mb-1">{record.diagnosis}</h3>
                       <p className="text-xs text-slate-500 mb-4 font-medium">Flock: <span className="text-slate-700">{flockName}</span></p>
                       
-                      <div className="space-y-2 text-sm text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-50">
+                      <div className="flex-1 space-y-2 text-sm text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-50">
                          {record.details && <p className="line-clamp-2">{record.details}</p>}
                          {record.medication && <div className="flex justify-between"><span>Rx:</span> <span className="font-medium text-slate-800">{record.medication}</span></div>}
                          {record.mortality > 0 && <div className="flex justify-between text-red-600 font-bold"><span>Mortality:</span> <span>{record.mortality} birds</span></div>}
@@ -600,7 +634,7 @@ const HealthManagement: React.FC = () => {
                       </div>
 
                       <div className="mt-4 pt-3 border-t border-slate-50 flex justify-between items-center text-xs">
-                         <span className="text-slate-400">Vet: {record.veterinarian}</span>
+                         <span className="text-slate-400 truncate max-w-[100px]" title={record.veterinarian}>Vet: {record.veterinarian}</span>
                          <span className={`font-bold ${record.status === 'COMPLETED' || record.status === 'RESOLVED' ? 'text-emerald-600' : 'text-amber-500'}`}>
                             {record.status}
                          </span>
@@ -608,29 +642,29 @@ const HealthManagement: React.FC = () => {
                    </div>
                  );
               })}
-              {filteredRecords.length === 0 && (
+              {processedRecords.length === 0 && (
                 <div className="col-span-full py-12 text-center text-slate-400 italic bg-slate-50 rounded-3xl border border-dashed border-slate-200">
                   No records found for this category.
                 </div>
               )}
            </div>
          ) : (
-           <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
+           <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden animate-in fade-in">
              <div className="overflow-x-auto">
                <table className="w-full text-left border-collapse">
                  <thead>
                    <tr className="bg-slate-50/80 text-slate-500 text-[10px] uppercase font-bold tracking-widest border-b border-slate-100">
-                     <th className="px-6 py-4">Date</th>
-                     <th className="px-6 py-4">Type</th>
-                     <th className="px-6 py-4">Diagnosis / Event</th>
-                     <th className="px-6 py-4">Flock</th>
+                     <th className="px-6 py-4 cursor-pointer hover:bg-slate-100" onClick={() => handleSort('date')}>Date <SortIcon column="date" /></th>
+                     <th className="px-6 py-4 cursor-pointer hover:bg-slate-100" onClick={() => handleSort('type')}>Type <SortIcon column="type" /></th>
+                     <th className="px-6 py-4 cursor-pointer hover:bg-slate-100" onClick={() => handleSort('diagnosis')}>Diagnosis / Event <SortIcon column="diagnosis" /></th>
+                     <th className="px-6 py-4 cursor-pointer hover:bg-slate-100" onClick={() => handleSort('flock')}>Flock <SortIcon column="flock" /></th>
                      <th className="px-6 py-4">Key Details</th>
-                     <th className="px-6 py-4">Status</th>
+                     <th className="px-6 py-4 cursor-pointer hover:bg-slate-100" onClick={() => handleSort('status')}>Status <SortIcon column="status" /></th>
                      <th className="px-6 py-4 text-right">Actions</th>
                    </tr>
                  </thead>
                  <tbody className="divide-y divide-slate-50 text-sm">
-                   {filteredRecords.map(record => {
+                   {processedRecords.map(record => {
                      const flockName = flocks.find(f => f.id === record.flockId)?.name || record.flockId;
                      return (
                        <tr key={record.id} className="hover:bg-slate-50 transition-colors group">
@@ -681,7 +715,7 @@ const HealthManagement: React.FC = () => {
                        </tr>
                      );
                    })}
-                   {filteredRecords.length === 0 && (
+                   {processedRecords.length === 0 && (
                       <tr>
                         <td colSpan={7} className="px-6 py-12 text-center text-slate-400 italic">
                           No records found matching this filter.

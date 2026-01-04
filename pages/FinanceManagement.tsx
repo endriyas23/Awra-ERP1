@@ -71,7 +71,6 @@ const FinanceManagement: React.FC = () => {
               const wAmount = base * (wRate / 100);
               
               // Only update if user hasn't manually overridden amounts (simple check: usually we just overwrite)
-              // Ideally we'd have a 'isManual' flag but for simplicity, we auto-calc if rates are present
               setForm(f => ({
                   ...f,
                   vatAmount: vAmount.toFixed(2),
@@ -166,17 +165,31 @@ const FinanceManagement: React.FC = () => {
           .filter(t => t.status === 'COMPLETED')
           .reduce((acc, t) => acc + (t.type === 'INCOME' ? t.amount : -t.amount), 0);
 
-      // Liabilities
-      const payables = transactions.filter(t => t.status === 'PENDING').reduce((acc, t) => acc + t.amount, 0);
+      // Liabilities Breakdown
+      const allPendingExpenses = transactions.filter(t => t.status === 'PENDING' && t.type === 'EXPENSE');
+      
+      const payrollTaxPayable = allPendingExpenses
+          .filter(t => t.description.includes('Payroll Tax') || t.description.includes('PAYE'))
+          .reduce((acc, t) => acc + t.amount, 0);
+
+      const pensionPayable = allPendingExpenses
+          .filter(t => t.description.includes('Pension Fund'))
+          .reduce((acc, t) => acc + t.amount, 0);
+
+      const generalPayables = allPendingExpenses
+          .filter(t => !t.description.includes('Payroll Tax') && !t.description.includes('PAYE') && !t.description.includes('Pension Fund'))
+          .reduce((acc, t) => acc + t.amount, 0);
       
       // Net VAT Liability (Cumulative)
       const totalOutputVAT = transactions.filter(t => t.type === 'INCOME' && t.status !== 'CANCELLED').reduce((acc, t) => acc + (t.vatAmount || 0), 0);
       const totalInputVAT = transactions.filter(t => t.type === 'EXPENSE' && t.status !== 'CANCELLED').reduce((acc, t) => acc + (t.vatAmount || 0), 0);
       const taxPayable = Math.max(0, totalOutputVAT - totalInputVAT);
 
+      const totalLiabilities = generalPayables + payrollTaxPayable + pensionPayable + taxPayable;
+
       return {
           assets: { inventoryValue, receivables, cashOnHand, total: inventoryValue + receivables + cashOnHand },
-          liabilities: { payables, taxPayable, total: payables + taxPayable }
+          liabilities: { generalPayables, payrollTaxPayable, pensionPayable, taxPayable, total: totalLiabilities }
       };
   }, [items, salesRecords, transactions]);
 
@@ -185,8 +198,10 @@ const FinanceManagement: React.FC = () => {
       { name: 'Cash', type: 'Asset', value: balanceSheet.assets.cashOnHand },
       { name: 'Inventory', type: 'Asset', value: balanceSheet.assets.inventoryValue },
       { name: 'Receivables', type: 'Asset', value: balanceSheet.assets.receivables },
-      { name: 'Payables', type: 'Liability', value: balanceSheet.liabilities.payables },
-      { name: 'Tax Due', type: 'Liability', value: balanceSheet.liabilities.taxPayable },
+      { name: 'Payables', type: 'Liability', value: balanceSheet.liabilities.generalPayables },
+      { name: 'Payroll Tax', type: 'Liability', value: balanceSheet.liabilities.payrollTaxPayable },
+      { name: 'Pension', type: 'Liability', value: balanceSheet.liabilities.pensionPayable },
+      { name: 'VAT Due', type: 'Liability', value: balanceSheet.liabilities.taxPayable },
   ], [balanceSheet]);
 
   // 3. Tax Report Data (Period)
@@ -196,7 +211,16 @@ const FinanceManagement: React.FC = () => {
       const whtPayable = filteredTransactions.filter(t => t.type === 'EXPENSE').reduce((acc, t) => acc + (t.withholdingAmount || 0), 0);
       const whtReceivable = filteredTransactions.filter(t => t.type === 'INCOME').reduce((acc, t) => acc + (t.withholdingAmount || 0), 0);
       
-      return { output, input, net: output - input, whtPayable, whtReceivable };
+      // Filter for Payroll and Pension based on naming convention in HR module
+      const paye = filteredTransactions
+        .filter(t => t.type === 'EXPENSE' && (t.description.includes('Payroll Tax') || t.description.includes('PAYE')))
+        .reduce((acc, t) => acc + t.amount, 0);
+
+      const pension = filteredTransactions
+        .filter(t => t.type === 'EXPENSE' && t.description.includes('Pension Fund'))
+        .reduce((acc, t) => acc + t.amount, 0);
+      
+      return { output, input, net: output - input, whtPayable, whtReceivable, paye, pension };
   }, [filteredTransactions]);
 
   // 4. Trend Data for Chart
@@ -344,6 +368,33 @@ const FinanceManagement: React.FC = () => {
       }
   };
 
+  const handleExport = () => {
+      const headers = ['Date', 'Description', 'Category', 'Type', 'Amount', 'VAT Amount', 'WHT Amount', 'Status', 'Reference ID'];
+      const csvContent = [
+          headers.join(','),
+          ...filteredTransactions.map(t => [
+              t.date,
+              `"${t.description.replace(/"/g, '""')}"`,
+              t.category,
+              t.type,
+              t.amount.toFixed(2),
+              (t.vatAmount || 0).toFixed(2),
+              (t.withholdingAmount || 0).toFixed(2),
+              t.status,
+              t.referenceId || ''
+          ].join(','))
+      ].join('\n');
+
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `Awra_Financials_${dateRange.start}_to_${dateRange.end}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+  };
+
   const previewCashFlow = () => {
       const base = parseFloat(form.baseAmount) || 0;
       const vat = parseFloat(form.vatAmount) || 0;
@@ -390,6 +441,14 @@ const FinanceManagement: React.FC = () => {
                     />
                 </div>
             </div>
+
+            <button 
+                onClick={handleExport}
+                className="bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 px-4 py-2.5 rounded-xl font-bold shadow-sm transition-all flex items-center justify-center gap-2 whitespace-nowrap"
+                title="Export filtered transactions to CSV"
+            >
+                <span>📥</span> Export
+            </button>
 
             <button 
                 onClick={() => handleOpenModal()}
@@ -598,8 +657,14 @@ const FinanceManagement: React.FC = () => {
                           <div>
                               <h4 className="text-xs font-bold text-red-600 uppercase mb-3 border-b border-red-100 pb-1">Liabilities</h4>
                               <div className="space-y-2 text-sm">
-                                  <div className="flex justify-between"><span className="text-slate-500">Accounts Payable</span> <span className="font-bold">${balanceSheet.liabilities.payables.toLocaleString()}</span></div>
-                                  <div className="flex justify-between"><span className="text-slate-500">Tax Payable</span> <span className="font-bold">${balanceSheet.liabilities.taxPayable.toLocaleString()}</span></div>
+                                  <div className="flex justify-between"><span className="text-slate-500">Accounts Payable</span> <span className="font-bold">${balanceSheet.liabilities.generalPayables.toLocaleString()}</span></div>
+                                  {balanceSheet.liabilities.payrollTaxPayable > 0 && (
+                                      <div className="flex justify-between bg-red-50/50 px-1 rounded"><span className="text-slate-500">Payroll Tax Payable</span> <span className="font-bold text-red-600">${balanceSheet.liabilities.payrollTaxPayable.toLocaleString()}</span></div>
+                                  )}
+                                  {balanceSheet.liabilities.pensionPayable > 0 && (
+                                      <div className="flex justify-between bg-red-50/50 px-1 rounded"><span className="text-slate-500">Pension Payable</span> <span className="font-bold text-red-600">${balanceSheet.liabilities.pensionPayable.toLocaleString()}</span></div>
+                                  )}
+                                  <div className="flex justify-between"><span className="text-slate-500">VAT Payable</span> <span className="font-bold">${balanceSheet.liabilities.taxPayable.toLocaleString()}</span></div>
                                   <div className="pt-2 border-t border-slate-100 flex justify-between font-bold text-red-700">
                                       <span>Total Liabilities</span>
                                       <span>${balanceSheet.liabilities.total.toLocaleString()}</span>
@@ -734,14 +799,21 @@ const FinanceManagement: React.FC = () => {
       {/* --- TAX REPORT VIEW --- */}
       {activeTab === 'TAX' && (
           <div className="space-y-6 animate-in slide-in-from-right-4 duration-300">
+              <h3 className="text-xl font-bold text-slate-800">Sales Tax (VAT)</h3>
               <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                 <StatCard label="Net VAT Payable" value={`$${Math.max(0, taxData.net).toLocaleString()}`} icon="🏛️" color={taxData.net > 0 ? "bg-red-500" : "bg-emerald-500"} />
                 <StatCard label="Output VAT" value={`$${taxData.output.toLocaleString()}`} icon="📥" color="bg-amber-500" />
                 <StatCard label="Input VAT" value={`$${taxData.input.toLocaleString()}`} icon="📤" color="bg-blue-500" />
                 <StatCard label="WHT Credit" value={`$${taxData.whtReceivable.toLocaleString()}`} icon="🧾" color="bg-teal-500" />
               </div>
+
+              <h3 className="text-xl font-bold text-slate-800 pt-6 border-t border-slate-100">Payroll Liabilities</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <StatCard label="Payroll Tax (PAYE)" value={`$${taxData.paye.toLocaleString()}`} icon="👔" color="bg-indigo-500" />
+                <StatCard label="Pension Fund" value={`$${taxData.pension.toLocaleString()}`} icon="🏦" color="bg-purple-500" />
+              </div>
               
-              <div className="bg-slate-900 text-white p-8 rounded-3xl shadow-xl">
+              <div className="bg-slate-900 text-white p-8 rounded-3xl shadow-xl mt-6">
                   <h3 className="text-xl font-bold mb-6">Tax Summary ({dateRange.start} to {dateRange.end})</h3>
                   <div className="space-y-4 max-w-lg">
                       <div className="flex justify-between border-b border-slate-700 pb-3">
@@ -757,6 +829,14 @@ const FinanceManagement: React.FC = () => {
                           <span className={`font-bold text-lg ${taxData.net > 0 ? 'text-red-400' : 'text-emerald-400'}`}>
                               ${Math.abs(taxData.net).toFixed(2)} {taxData.net < 0 ? '(Credit)' : '(Payable)'}
                           </span>
+                      </div>
+                      <div className="flex justify-between border-b border-slate-700 pb-3 pt-4">
+                          <span className="text-slate-400">Total PAYE Payable</span>
+                          <span className="font-bold text-red-400">${taxData.paye.toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between border-b border-slate-700 pb-3">
+                          <span className="text-slate-400">Total Pension Payable</span>
+                          <span className="font-bold text-red-400">${taxData.pension.toFixed(2)}</span>
                       </div>
                   </div>
               </div>

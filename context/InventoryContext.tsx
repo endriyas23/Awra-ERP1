@@ -84,6 +84,91 @@ const calculateFlockAge = (startDate: string, initialAge: number) => {
   return Math.max(0, diffDays) + (initialAge || 0);
 };
 
+// --- Mappers for Snake_Case (DB) <-> CamelCase (App) ---
+
+const mapEmployeeFromDB = (db: any): Employee => ({
+  id: db.id,
+  fullName: db.full_name,
+  nationalId: db.national_id,
+  phone: db.phone,
+  address: db.address,
+  emergencyContact: db.emergency_contact,
+  gender: db.gender,
+  dob: db.dob,
+  photoUrl: db.photo_url,
+  jobTitle: db.job_title,
+  department: db.department,
+  employmentType: db.employment_type,
+  status: db.status,
+  hireDate: db.hire_date,
+  contractEnd: db.contract_end_date,
+  probationEnd: db.probation_end_date,
+  salaryStructure: db.salary_structure,
+  baseSalary: Number(db.base_salary),
+  allowances: db.allowances || { housing: 0, transport: 0, risk: 0, other: 0 },
+  deductions: db.deductions || { pension: 0, tax: 0, healthInsurance: 0 }
+});
+
+const mapEmployeeToDB = (emp: Partial<Employee>) => {
+  const dbObj: any = {};
+  if (emp.id !== undefined) dbObj.id = emp.id;
+  if (emp.fullName !== undefined) dbObj.full_name = emp.fullName;
+  if (emp.nationalId !== undefined) dbObj.national_id = emp.nationalId;
+  if (emp.phone !== undefined) dbObj.phone = emp.phone;
+  if (emp.address !== undefined) dbObj.address = emp.address;
+  if (emp.emergencyContact !== undefined) dbObj.emergency_contact = emp.emergencyContact;
+  if (emp.gender !== undefined) dbObj.gender = emp.gender;
+  
+  // Date Fields: Send NULL if empty string to avoid invalid input syntax for date types
+  if (emp.dob !== undefined) dbObj.dob = emp.dob === '' ? null : emp.dob;
+  
+  if (emp.photoUrl !== undefined) dbObj.photo_url = emp.photoUrl;
+  if (emp.jobTitle !== undefined) dbObj.job_title = emp.jobTitle;
+  if (emp.department !== undefined) dbObj.department = emp.department;
+  if (emp.employmentType !== undefined) dbObj.employment_type = emp.employmentType;
+  if (emp.status !== undefined) dbObj.status = emp.status;
+  
+  if (emp.hireDate !== undefined) dbObj.hire_date = emp.hireDate === '' ? null : emp.hireDate;
+  if (emp.contractEnd !== undefined) dbObj.contract_end_date = emp.contractEnd === '' ? null : emp.contractEnd;
+  if (emp.probationEnd !== undefined) dbObj.probation_end_date = emp.probationEnd === '' ? null : emp.probationEnd;
+  
+  if (emp.salaryStructure !== undefined) dbObj.salary_structure = emp.salaryStructure;
+  if (emp.baseSalary !== undefined) dbObj.base_salary = emp.baseSalary;
+  if (emp.allowances !== undefined) dbObj.allowances = emp.allowances;
+  if (emp.deductions !== undefined) dbObj.deductions = emp.deductions;
+  return dbObj;
+};
+
+const mapPayrollFromDB = (db: any): PayrollRun => ({
+  id: db.id,
+  period: db.period,
+  dateProcessed: db.date_processed,
+  employeeId: db.employee_id,
+  employeeName: db.employees ? (Array.isArray(db.employees) ? db.employees[0]?.full_name : db.employees.full_name) : 'Unknown',
+  basePay: Number(db.base_pay),
+  totalAllowances: Number(db.total_allowances),
+  totalDeductions: Number(db.total_deductions),
+  overtimeHours: Number(db.overtime_hours),
+  overtimePay: Number(db.overtime_pay),
+  netPay: Number(db.net_pay),
+  status: db.status
+});
+
+const mapPayrollToDB = (run: PayrollRun) => ({
+  id: run.id,
+  period: run.period,
+  date_processed: run.dateProcessed,
+  employee_id: run.employeeId,
+  base_pay: run.basePay,
+  total_allowances: run.totalAllowances,
+  total_deductions: run.totalDeductions,
+  overtime_hours: run.overtimeHours,
+  overtime_pay: run.overtimePay,
+  net_pay: run.netPay,
+  status: run.status
+});
+
+
 export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const { addNotification } = useNotification();
   const { user } = useAuth();
@@ -146,14 +231,12 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         if (!settingsStr) return;
         
         const settings = JSON.parse(settingsStr);
-        // Check if reminders are enabled in settings
         if (!settings.notifications?.taskReminders) return;
 
         const reminderDays = settings.notifications.reminderDaysBefore ?? 1;
         const today = new Date();
         today.setHours(0, 0, 0, 0);
 
-        // Avoid duplicate alerts per session
         const notifiedKey = 'awra_notified_tasks';
         const notifiedTasks = JSON.parse(sessionStorage.getItem(notifiedKey) || '[]');
         let newNotified = [...notifiedTasks];
@@ -168,8 +251,6 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
           const diffTime = dueDate.getTime() - today.getTime();
           const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
-          // Trigger if due date is today or within the next N days
-          // Also trigger for Overdue items (negative diffDays) that haven't been notified this session
           if (diffDays <= reminderDays) {
              let message = '';
              let type: 'WARNING' | 'ERROR' = 'WARNING';
@@ -197,7 +278,6 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       }
     };
 
-    // Run check on mount and when tasks change, with a slight delay to ensure settings/data are ready
     const timer = setTimeout(checkTaskReminders, 2500);
     return () => clearTimeout(timer);
   }, [tasks, addNotification]);
@@ -224,7 +304,9 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
           safeFetch(supabase.from('tasks').select('*')),
           safeFetch(supabase.from('daily_logs').select('*')),
           safeFetch(supabase.from('customers').select('*')),
-          safeFetch(supabase.from('custom_events').select('*'))
+          safeFetch(supabase.from('custom_events').select('*')),
+          safeFetch(supabase.from('employees').select('*')), 
+          safeFetch(supabase.from('payroll_records').select('*, employees(full_name)')),
         ]);
 
         const [
@@ -238,7 +320,9 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
           { data: taskData },
           { data: dailyLogData },
           { data: customerData },
-          { data: customEventData }
+          { data: customEventData },
+          { data: empData, error: empError },
+          { data: payrollData, error: payrollError }
         ] = results;
 
         if (flocksData) {
@@ -258,11 +342,21 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         if (dailyLogData) setDailyLogs(dailyLogData);
         if (customerData) setCustomers(customerData);
         if (customEventData) setCustomEvents(customEventData);
+        
+        // HR Data Mapping
+        if (empData) setEmployees(empData.map(mapEmployeeFromDB));
+        if (empError) console.warn("Supabase: Error fetching employees:", empError.message);
 
-        // Load local-only HR data from cache for this update as we aren't migrating backend schema live
-        loadFromCache();
+        if (payrollData) setPayrollRuns(payrollData.map(mapPayrollFromDB));
+        if (payrollError) console.warn("Supabase: Error fetching payroll:", payrollError.message);
+
+        if (!flocksData && !empData) {
+            // If main data missing, assume offline and load cache
+            loadFromCache();
+        }
 
       } catch (error) {
+        console.error("Critical error fetching data:", error);
         loadFromCache();
       }
     };
@@ -279,28 +373,34 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     return () => clearTimeout(timer);
   }, [items, consumptionRecords, eggLogs, salesRecords, transactions, tasks, flocks, healthRecords, dailyLogs, customers, customEvents, employees, payrollRuns]);
 
-  // Helper to suppress unhandled rejections during offline mode
-  const safeSupabaseCall = async (call: Promise<any>) => {
+  // Helper to handle Supabase responses correctly (checking error object)
+  const safeSupabaseCall = async (call: Promise<any>, errorContext = "Operation") => {
       try {
-          await call;
-      } catch (e) {
-          console.warn('Supabase sync failed (offline?):', e);
+          const { error } = await call;
+          if (error) {
+              console.error(`Supabase error [${errorContext}]:`, error);
+              const errMsg = error.message || error.details || JSON.stringify(error);
+              addNotification('ERROR', 'Sync Failed', `${errorContext}: ${errMsg}`);
+          }
+      } catch (e: any) {
+          console.warn(`Network error [${errorContext}]:`, e);
+          // Don't notify for network error to avoid spamming offline users
       }
   };
 
   const addItem = async (item: InventoryItem) => {
     setItems(prev => [item, ...prev]);
-    safeSupabaseCall(supabase.from('inventory_items').insert([item]));
+    safeSupabaseCall(supabase.from('inventory_items').insert([item]), 'Add Item');
   };
 
   const updateItem = async (id: string, updates: Partial<InventoryItem>) => {
     setItems(prev => prev.map(item => item.id === id ? { ...item, ...updates } : item));
-    safeSupabaseCall(supabase.from('inventory_items').update(updates).eq('id', id));
+    safeSupabaseCall(supabase.from('inventory_items').update(updates).eq('id', id), 'Update Item');
   };
 
   const deleteItem = async (id: string) => {
     setItems(prev => prev.filter(item => item.id !== id));
-    safeSupabaseCall(supabase.from('inventory_items').delete().eq('id', id));
+    safeSupabaseCall(supabase.from('inventory_items').delete().eq('id', id), 'Delete Item');
   };
 
   const adjustStock = async (id: string, amount: number) => {
@@ -309,37 +409,37 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     const newQuantity = Math.max(0, currentItem.quantity + amount);
     const newLastRestocked = amount > 0 ? new Date().toISOString().split('T')[0] : currentItem.lastRestocked;
     setItems(prev => prev.map(item => item.id === id ? { ...item, quantity: newQuantity, lastRestocked: newLastRestocked } : item));
-    safeSupabaseCall(supabase.from('inventory_items').update({ quantity: newQuantity, lastRestocked: newLastRestocked }).eq('id', id));
+    safeSupabaseCall(supabase.from('inventory_items').update({ quantity: newQuantity, lastRestocked: newLastRestocked }).eq('id', id), 'Adjust Stock');
   };
 
   const logConsumption = async (record: FeedConsumption) => {
     setConsumptionRecords(prev => [record, ...prev]);
-    safeSupabaseCall(supabase.from('consumption_logs').insert([record]));
+    safeSupabaseCall(supabase.from('consumption_logs').insert([record]), 'Log Feed');
   };
 
   const updateConsumption = async (id: string, updates: Partial<FeedConsumption>) => {
     setConsumptionRecords(prev => prev.map(r => r.id === id ? { ...r, ...updates } : r));
-    safeSupabaseCall(supabase.from('consumption_logs').update(updates).eq('id', id));
+    safeSupabaseCall(supabase.from('consumption_logs').update(updates).eq('id', id), 'Update Feed Log');
   };
 
   const deleteConsumption = async (id: string) => {
     setConsumptionRecords(prev => prev.filter(r => r.id !== id));
-    safeSupabaseCall(supabase.from('consumption_logs').delete().eq('id', id));
+    safeSupabaseCall(supabase.from('consumption_logs').delete().eq('id', id), 'Delete Feed Log');
   };
 
   const logEggCollection = async (log: EggCollectionLog) => {
     setEggLogs(prev => [log, ...prev]);
-    safeSupabaseCall(supabase.from('egg_logs').insert([log]));
+    safeSupabaseCall(supabase.from('egg_logs').insert([log]), 'Log Eggs');
   };
 
   const updateEggLog = async (id: string, updates: Partial<EggCollectionLog>) => {
     setEggLogs(prev => prev.map(log => log.id === id ? { ...log, ...updates } : log));
-    safeSupabaseCall(supabase.from('egg_logs').update(updates).eq('id', id));
+    safeSupabaseCall(supabase.from('egg_logs').update(updates).eq('id', id), 'Update Egg Log');
   };
 
   const deleteEggLog = async (id: string) => {
     setEggLogs(prev => prev.filter(log => log.id !== id));
-    safeSupabaseCall(supabase.from('egg_logs').delete().eq('id', id));
+    safeSupabaseCall(supabase.from('egg_logs').delete().eq('id', id), 'Delete Egg Log');
   };
 
   const addSale = async (sale: SaleRecord) => {
@@ -359,60 +459,66 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         status: sale.status === 'PAID' ? 'COMPLETED' : 'PENDING'
       };
       setTransactions(prev => [transaction, ...prev]);
-      safeSupabaseCall(supabase.from('transactions').insert([transaction]));
+      safeSupabaseCall(supabase.from('transactions').insert([transaction]), 'Auto-Log Transaction');
     }
-    safeSupabaseCall(supabase.from('sales').insert([sale]));
+    safeSupabaseCall(supabase.from('sales').insert([sale]), 'Add Sale');
   };
 
   const updateSale = async (id: string, updates: Partial<SaleRecord>) => {
     setSalesRecords(prev => prev.map(sale => sale.id === id ? { ...sale, ...updates } : sale));
-    safeSupabaseCall(supabase.from('sales').update(updates).eq('id', id));
+    safeSupabaseCall(supabase.from('sales').update(updates).eq('id', id), 'Update Sale');
   };
 
   const deleteSale = async (id: string) => {
     setSalesRecords(prev => prev.filter(sale => sale.id !== id));
-    safeSupabaseCall(supabase.from('sales').delete().eq('id', id));
+    safeSupabaseCall(supabase.from('sales').delete().eq('id', id), 'Delete Sale');
   };
 
   const updateSaleStatus = async (id: string, status: SaleStatus) => {
     setSalesRecords(prev => prev.map(sale => sale.id === id ? { ...sale, status } : sale));
-    safeSupabaseCall(supabase.from('sales').update({ status }).eq('id', id));
+    safeSupabaseCall(supabase.from('sales').update({ status }).eq('id', id), 'Update Sale Status');
   };
 
   const addTransaction = async (transaction: FinancialTransaction) => {
     setTransactions(prev => [transaction, ...prev]);
-    safeSupabaseCall(supabase.from('transactions').insert([transaction]));
+    safeSupabaseCall(supabase.from('transactions').insert([transaction]), 'Add Transaction');
   };
 
   const updateTransaction = async (id: string, updates: Partial<FinancialTransaction>) => {
     setTransactions(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
-    safeSupabaseCall(supabase.from('transactions').update(updates).eq('id', id));
+    safeSupabaseCall(supabase.from('transactions').update(updates).eq('id', id), 'Update Transaction');
   };
 
   const deleteTransaction = async (id: string) => {
     setTransactions(prev => prev.filter(t => t.id !== id));
-    safeSupabaseCall(supabase.from('transactions').delete().eq('id', id));
+    safeSupabaseCall(supabase.from('transactions').delete().eq('id', id), 'Delete Transaction');
   };
 
   const addTask = async (task: Task) => {
     setTasks(prev => [task, ...prev]);
-    safeSupabaseCall(supabase.from('tasks').insert([task]));
+    safeSupabaseCall(supabase.from('tasks').insert([task]), 'Add Task');
   };
 
   const updateTask = async (id: string, updates: Partial<Task>) => {
     setTasks(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
-    safeSupabaseCall(supabase.from('tasks').update(updates).eq('id', id));
+    safeSupabaseCall(supabase.from('tasks').update(updates).eq('id', id), 'Update Task');
   };
 
   const deleteTask = async (id: string) => {
     setTasks(prev => prev.filter(t => t.id !== id));
-    safeSupabaseCall(supabase.from('tasks').delete().eq('id', id));
+    safeSupabaseCall(supabase.from('tasks').delete().eq('id', id), 'Delete Task');
   };
 
   const addFlock = async (flock: Flock) => {
     const flockWithAge = { ...flock, ageInDays: calculateFlockAge(flock.startDate, flock.initialAge) };
     setFlocks(prev => [flockWithAge, ...prev]);
-    safeSupabaseCall(supabase.from('flocks').insert([flockWithAge]));
+    
+    // IMPORTANT: Exclude fields that do not exist in the database schema.
+    // 'acquisitionVatRate', 'ageInDays', 'costPerBird', 'totalAcquisitionCost' are known to cause errors if sent.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { acquisitionVatRate, ageInDays, costPerBird, totalAcquisitionCost, ...dbPayload } = flockWithAge;
+    
+    safeSupabaseCall(supabase.from('flocks').insert([dbPayload]), 'Add Flock');
   };
 
   const updateFlock = async (id: string, updates: Partial<Flock>) => {
@@ -426,84 +532,97 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         }
         return f;
     }));
-    safeSupabaseCall(supabase.from('flocks').update(updates).eq('id', id));
+    
+    // Ensure we don't send potentially missing columns on update either
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { acquisitionVatRate, ageInDays, costPerBird, totalAcquisitionCost, ...safeUpdates } = updates;
+    
+    safeSupabaseCall(supabase.from('flocks').update(safeUpdates).eq('id', id), 'Update Flock');
   };
 
   const deleteFlock = async (id: string) => {
     setFlocks(prev => prev.filter(f => f.id !== id));
-    safeSupabaseCall(supabase.from('flocks').delete().eq('id', id));
+    safeSupabaseCall(supabase.from('flocks').delete().eq('id', id), 'Delete Flock');
   };
 
   const addHealthRecord = async (record: HealthRecord) => {
     setHealthRecords(prev => [record, ...prev]);
-    safeSupabaseCall(supabase.from('health_records').insert([record]));
+    safeSupabaseCall(supabase.from('health_records').insert([record]), 'Add Health Record');
   };
 
   const updateHealthRecord = async (id: string, updates: Partial<HealthRecord>) => {
     setHealthRecords(prev => prev.map(r => r.id === id ? { ...r, ...updates } : r));
-    safeSupabaseCall(supabase.from('health_records').update(updates).eq('id', id));
+    safeSupabaseCall(supabase.from('health_records').update(updates).eq('id', id), 'Update Health Record');
   };
 
   const deleteHealthRecord = async (id: string) => {
     setHealthRecords(prev => prev.filter(r => r.id !== id));
-    safeSupabaseCall(supabase.from('health_records').delete().eq('id', id));
+    safeSupabaseCall(supabase.from('health_records').delete().eq('id', id), 'Delete Health Record');
   };
 
   const addDailyLog = async (log: DailyLog) => {
     setDailyLogs(prev => [log, ...prev]);
-    safeSupabaseCall(supabase.from('daily_logs').insert([log]));
+    safeSupabaseCall(supabase.from('daily_logs').insert([log]), 'Add Daily Log');
   };
 
   const updateDailyLog = async (id: string, updates: Partial<DailyLog>) => {
     setDailyLogs(prev => prev.map(l => l.id === id ? { ...l, ...updates } : l));
-    safeSupabaseCall(supabase.from('daily_logs').update(updates).eq('id', id));
+    safeSupabaseCall(supabase.from('daily_logs').update(updates).eq('id', id), 'Update Daily Log');
   };
 
   const deleteDailyLog = async (id: string) => {
     setDailyLogs(prev => prev.filter(l => l.id !== id));
-    safeSupabaseCall(supabase.from('daily_logs').delete().eq('id', id));
+    safeSupabaseCall(supabase.from('daily_logs').delete().eq('id', id), 'Delete Daily Log');
   };
 
   const addCustomer = async (customer: Customer) => {
     setCustomers(prev => [customer, ...prev]);
-    safeSupabaseCall(supabase.from('customers').insert([customer]));
+    safeSupabaseCall(supabase.from('customers').insert([customer]), 'Add Customer');
   };
 
   const updateCustomer = async (id: string, updates: Partial<Customer>) => {
     setCustomers(prev => prev.map(c => c.id === id ? { ...c, ...updates } : c));
-    safeSupabaseCall(supabase.from('customers').update(updates).eq('id', id));
+    safeSupabaseCall(supabase.from('customers').update(updates).eq('id', id), 'Update Customer');
   };
 
   const deleteCustomer = async (id: string) => {
     setCustomers(prev => prev.filter(c => c.id !== id));
-    safeSupabaseCall(supabase.from('customers').delete().eq('id', id));
+    safeSupabaseCall(supabase.from('customers').delete().eq('id', id), 'Delete Customer');
   };
 
   const addCustomEvent = async (event: FarmEvent) => {
     setCustomEvents(prev => [event, ...prev]);
-    safeSupabaseCall(supabase.from('custom_events').insert([event]));
+    safeSupabaseCall(supabase.from('custom_events').insert([event]), 'Add Event');
   };
 
   const deleteCustomEvent = async (id: string) => {
     setCustomEvents(prev => prev.filter(e => e.id !== id));
-    safeSupabaseCall(supabase.from('custom_events').delete().eq('id', id));
+    safeSupabaseCall(supabase.from('custom_events').delete().eq('id', id), 'Delete Event');
   };
 
-  const addEmployee = (employee: Employee) => {
+  // --- HR / Employee Management ---
+
+  const addEmployee = async (employee: Employee) => {
     setEmployees(prev => [...prev, employee]);
-    // Simulate backend sync for offline demo or expand Supabase later
+    const dbRecord = mapEmployeeToDB(employee);
+    safeSupabaseCall(supabase.from('employees').insert([dbRecord]), 'Add Employee');
   };
 
-  const updateEmployee = (id: string, updates: Partial<Employee>) => {
+  const updateEmployee = async (id: string, updates: Partial<Employee>) => {
     setEmployees(prev => prev.map(e => e.id === id ? { ...e, ...updates } : e));
+    const dbUpdates = mapEmployeeToDB(updates);
+    safeSupabaseCall(supabase.from('employees').update(dbUpdates).eq('id', id), 'Update Employee');
   };
 
-  const deleteEmployee = (id: string) => {
+  const deleteEmployee = async (id: string) => {
     setEmployees(prev => prev.filter(e => e.id !== id));
+    safeSupabaseCall(supabase.from('employees').delete().eq('id', id), 'Delete Employee');
   };
 
-  const addPayrollRun = (run: PayrollRun) => {
+  const addPayrollRun = async (run: PayrollRun) => {
     setPayrollRuns(prev => [...prev, run]);
+    const dbRecord = mapPayrollToDB(run);
+    safeSupabaseCall(supabase.from('payroll_records').insert([dbRecord]), 'Add Payroll');
   };
 
   return (
